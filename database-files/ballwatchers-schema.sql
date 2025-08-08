@@ -166,8 +166,7 @@ CREATE TABLE IF NOT EXISTS Game (
    CONSTRAINT FK_Game_AwayTeam FOREIGN KEY (away_team_id)
        REFERENCES Teams(team_id)
        ON UPDATE CASCADE
-       ON DELETE RESTRICT,
-   CONSTRAINT CHK_DifferentTeams CHECK (home_team_id != away_team_id)
+       ON DELETE RESTRICT
 );
 
 

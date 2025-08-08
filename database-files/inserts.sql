@@ -1,3 +1,5 @@
+Use BallWatch;
+
 INSERT INTO Users (email, username, role) VALUES
 ('mike.lewis@ballwatch.com', 'mlewis', 'admin'),
 ('marcus.thompson@nets.com', 'mthompson', 'coach'),
