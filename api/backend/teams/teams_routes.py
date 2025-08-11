@@ -2,8 +2,7 @@
 # Teams Blueprint
 # Returns team information, rosters, and management
 ########################################################
-from flask import Blueprint, request, jsonify, make_response, current_app, redirect, url_for
-import json
+from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db
 
 teams = Blueprint('teams', __name__)
@@ -486,40 +485,3 @@ def update_team_player(team_id, player_id):
         current_app.logger.error(f'Error updating team player: {e}')
         db.get_db().rollback()
         return make_response(jsonify({"error": "Failed to update team player"}), 500)
-
-
-#------------------------------------------------------------
-# Remove player from team roster
-@teams.route('/teams/<int:team_id>/players/<int:player_id>', methods=['DELETE'])
-def remove_team_player(team_id, player_id):
-    """
-    Remove a player from team roster (sets left_date to current date).
-    """
-    try:
-        current_app.logger.info(f'DELETE /teams/{team_id}/players/{player_id} handler')
-        cursor = db.get_db().cursor()
-        
-        # Set left_date to current date to mark player as no longer on team
-        query = '''
-            UPDATE TeamsPlayers 
-            SET left_date = CURDATE()
-            WHERE team_id = %s AND player_id = %s AND left_date IS NULL
-        '''
-        
-        cursor.execute(query, (team_id, player_id))
-        
-        if cursor.rowcount == 0:
-            return make_response(jsonify({"error": "Player not found on this team"}), 404)
-        
-        db.get_db().commit()
-        
-        return make_response(jsonify({
-            "message": "Player removed from roster successfully",
-            "team_id": team_id,
-            "player_id": player_id
-        }), 200)
-        
-    except Exception as e:
-        current_app.logger.error(f'Error removing team player: {e}')
-        db.get_db().rollback()
-        return make_response(jsonify({"error": "Failed to remove team player"}), 500)
