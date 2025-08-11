@@ -35,4 +35,4 @@ with col4:
     st.image("assets/dishant.jpeg", caption="Dishant Budhi", width=200, use_container_width=True)
 
 with col5:
-    st.image("assets/vince.jpeg", caption="Developer 5 Name", width=200, use_container_width=True)
+    st.image("assets/frank.jpg", caption="Frank Healey", width=200, use_container_width=True)
