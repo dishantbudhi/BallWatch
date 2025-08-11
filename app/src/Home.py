@@ -55,7 +55,7 @@ user_options = {
     "Marcus Thompson - Head Coach": {
         "role": "head_coach",
         "first_name": "Marcus", 
-        "page": "pages/20_Admin_Home.py", #update this
+        "page": "pages/30_Head_Coach_Home.py", #update this
         "bio": "Marcus Thompson is the new head coach of the Nets, and together with the new GM, he wants to bring analytical basketball to Brooklyn. During his previous head coaching stints, he was often bogged down by dense spreadsheets and large PDF reports that were difficult to digest in between games. To coach effectively, he needs actionable insights and clear recommendations that help him plan strategies and make adjustments on the fly. This approach allows him to communicate confidently with his players while making decisions he knows are backed by solid statistics."
     },
     "Andre Wu - General Manager": {
