@@ -2,9 +2,9 @@ from flask import Blueprint, request, jsonify, make_response, current_app, redir
 import json
 from backend.db_connection import db
 
-players_routes = Blueprint('players_routes', __name__)
+players = Blueprint('players', __name__)
 
-@players_routes.route('/player-matchups', methods=['GET'])
+@players.route('/player-matchups', methods=['GET'])
 def get_player_matchups():
     try:
         current_app.logger.info('GET /player-matchups handler')

@@ -4,7 +4,7 @@ from backend.db_connection import db
 from backend.customers.customer_routes import customers
 from backend.products.products_routes import products
 from backend.simple.simple_routes import simple_routes
-from backend.players.players_routes import players_routes
+from backend.players.players_routes import players
 from backend.games.games_routes import games_routes
 from backend.teams.teams_routes import teams_routes
 import os
@@ -45,7 +45,7 @@ def create_app():
     app.register_blueprint(simple_routes)
     app.register_blueprint(customers,   url_prefix='/c')
     app.register_blueprint(products,    url_prefix='/p')
-    app.register_blueprint(players_routes)
+    app.register_blueprint(players)
     app.register_blueprint(games_routes)
     app.register_blueprint(teams_routes)
 
