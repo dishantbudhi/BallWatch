@@ -2,14 +2,7 @@
 # Players Blueprint
 # Returns player information, comparisons, and statistics
 ########################################################
-from flask import Blueprint
-from flask import request
-from flask import jsonify
-from flask import make_response
-from flask import current_app
-from flask import redirect
-from flask import url_for
-import json
+from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db
 
 #------------------------------------------------------------
@@ -456,8 +449,7 @@ def update_player_stats(player_id):
 
 #------------------------------------------------------------
 # Get player comparison data
-# This route allows users to specify multiple player IDs
-# and returns their comparison data side-by-side.
+# [Johnny-1.4, Andre-4.2]
 @players.route('/player-comparisons', methods=['GET'])
 def get_player_comparison():
     """
@@ -553,25 +545,3 @@ def get_player_comparison():
     the_response = make_response(jsonify(response_data))
     the_response.status_code = 200
     return the_response
-
-#------------------------------------------------------------
-# Get player matchups data
-# This route returns all player matchup information
-@players.route('/player-matchups', methods=['GET'])
-def get_player_matchups():
-    """
-    Get all player matchup data from the PlayerMatchup table.
-    Returns a list of all player matchups.
-    """
-    try:
-        current_app.logger.info('GET /player-matchups handler')
-        cursor = db.get_db().cursor()
-        cursor.execute('SELECT * FROM PlayerMatchup')
-        theData = cursor.fetchall()
-        
-        the_response = make_response(jsonify(theData))
-        the_response.status_code = 200
-        return the_response
-    except Exception as e:
-        current_app.logger.error(f'Error fetching player matchups: {e}')
-        return make_response(jsonify({"error": "Failed to fetch player matchups"}), 500)
