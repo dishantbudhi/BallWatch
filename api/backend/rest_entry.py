@@ -6,6 +6,7 @@ from backend.db_connection import db
 from backend.players.players_routes import players
 from backend.teams.teams_routes import teams
 from backend.games.games_routes import games
+from backend.games.game_plan_routes import gameplans
 from backend.analytics.analytics_routes import analytics
 from backend.strategy.strategy_routes import strategy
 from backend.admin.admin_routes import admin
@@ -40,6 +41,7 @@ def create_app():
     app.register_blueprint(players,     url_prefix='/api')
     app.register_blueprint(teams,       url_prefix='/api')
     app.register_blueprint(games,       url_prefix='/api')
+    #app.register_blueprint(gameplans,       url_prefix='/api')
     app.register_blueprint(analytics,   url_prefix='/api')
     app.register_blueprint(strategy,    url_prefix='/api')
     app.register_blueprint(admin,       url_prefix='/api')
