@@ -6,12 +6,16 @@ players_routes = Blueprint('players_routes', __name__)
 
 @players_routes.route('/player-matchups', methods=['GET'])
 def get_player_matchups():
-    current_app.logger.info('GET /player-matchups handler')
-    cursor = db.get_db().cursor()
+    try:
+        current_app.logger.info('GET /player-matchups handler')
+        cursor = db.get_db().cursor()
 
-    cursor.execute('SELECT * FROM PlayerMatchup')
-    theData = cursor.fetchall()
-    
-    the_response = make_response(jsonify(theData))
-    the_response.status_code = 200
-    return the_response
+        cursor.execute('SELECT * FROM PlayerMatchup')
+        theData = cursor.fetchall()
+        
+        the_response = make_response(jsonify(theData))
+        the_response.status_code = 200
+        return the_response
+    except Exception as e:
+        current_app.logger.error(f'Error fetching player matchups: {e}')
+        return make_response(jsonify({"error": "Failed to fetch player matchups"}), 500)

@@ -4,67 +4,84 @@ from backend.db_connection import db
 
 teams_routes = Blueprint('teams_routes', __name__)
 
-@teams_routes.route('/teams/<team_id>/players', methods=['GET'])
+@teams_routes.route('/teams/<int:team_id>/players', methods=['GET'])
 def get_team_players(team_id):
-    current_app.logger.info(f'GET /teams/{team_id}/players handler')
-    cursor = db.get_db().cursor()
+    try:
+        current_app.logger.info(f'GET /teams/{team_id}/players handler')
+        cursor = db.get_db().cursor()
 
-    # get current players where left_date is NULL, meaning they haven't left)
-    query = '''
-        SELECT DISTINCT p.player_id, p.first_name, p.last_name, p.position, 
-               tp.jersey_num, tp.joined_date, p.age, p.college, p.height, p.weight
-        FROM Players p 
-        JOIN TeamsPlayers tp ON p.player_id = tp.player_id 
-        WHERE tp.team_id = %s 
-        AND tp.left_date IS NULL
-        ORDER BY tp.jersey_num, p.last_name
-    '''
-    
-    cursor.execute(query, (team_id,))
-    theData = cursor.fetchall()
-    
-    the_response = make_response(jsonify(theData))
-    the_response.status_code = 200
-    return the_response
+        # get current players where left_date is NULL, meaning they haven't left)
+        query = '''
+            SELECT DISTINCT p.player_id, p.first_name, p.last_name, p.position, 
+                tp.jersey_num, tp.joined_date, p.age, p.college, p.height, p.weight
+            FROM Players p 
+            JOIN TeamsPlayers tp ON p.player_id = tp.player_id 
+            WHERE tp.team_id = %s 
+            AND tp.left_date IS NULL
+            ORDER BY tp.jersey_num, p.last_name
+        '''
+        
+        cursor.execute(query, (team_id,))
+        theData = cursor.fetchall()
+        
+        the_response = make_response(jsonify(theData))
+        the_response.status_code = 200
+        return the_response
+    except Exception as e:
+        current_app.logger.error(f'Error fetching team players: {e}')
+        return make_response(jsonify({"error": "Failed to fetch team players"}), 500)
 
 @teams_routes.route('/teams/<team_id>/players', methods=['POST'])
 def add_team_player(team_id):
-    current_app.logger.info(f'POST /teams/{team_id}/players handler')
-    cursor = db.get_db().cursor()
-    
-    new_player = request.get_json()
-    player_id = new_player.get('player_id')
-    jersey_num = new_player.get('jersey_num')
-    joined_date = new_player.get('joined_date')
+    try:
+        current_app.logger.info(f'POST /teams/{team_id}/players handler')
+        cursor = db.get_db().cursor()
+        
+        new_player = request.get_json()
+        player_id = new_player.get('player_id')
+        jersey_num = new_player.get('jersey_num')
+        joined_date = new_player.get('joined_date')
+        if not player_id or not jersey_num or not joined_date:
+            return make_response(jsonify({"error": "Missing required fields"}), 400)
 
-    query = '''
-        INSERT INTO TeamsPlayers (team_id, player_id, jersey_num, joined_date)
-        VALUES (%s, %s, %s, %s)
-    '''
-    
-    cursor.execute(query, (team_id, player_id, jersey_num, joined_date))
-    db.get_db().commit()
+        query = '''
+            INSERT INTO TeamsPlayers (team_id, player_id, jersey_num, joined_date)
+            VALUES (%s, %s, %s, %s)
+        '''
+        
+        cursor.execute(query, (team_id, player_id, jersey_num, joined_date))
+        db.get_db().commit()
 
-    the_response = make_response(jsonify(new_player), 201)
-    return the_response
+        the_response = make_response(jsonify(new_player), 201)
+        return the_response
+    except Exception as e:
+        current_app.logger.error(f'Error adding team player: {e}')
+        return make_response(jsonify({"error": "Failed to add team player"}), 500)
 
 @teams_routes.route('/teams/<team_id>/players/<int:player_id>', methods=['PUT'])
 def update_team_player(team_id, player_id):
-    current_app.logger.info(f'PUT /teams/{team_id}/players/{player_id} handler')
-    cursor = db.get_db().cursor()
-    
-    updated_player = request.get_json()
-    jersey_num = updated_player.get('jersey_num')
-    left_date = updated_player.get('left_date')
+    try:
+        current_app.logger.info(f'PUT /teams/{team_id}/players/{player_id} handler')
+        cursor = db.get_db().cursor()
+        
+        # Update jersey_num and left_date
+        updated_player = request.get_json()
+        jersey_num = updated_player.get('jersey_num')
+        left_date = updated_player.get('left_date')
+        if not jersey_num:
+            return make_response(jsonify({"error": "Missing required fields"}), 400)
 
-    query = '''
-        UPDATE TeamsPlayers 
-        SET jersey_num = %s, left_date = %s 
-        WHERE team_id = %s AND player_id = %s
-    '''
+        query = '''
+            UPDATE TeamsPlayers 
+            SET jersey_num = %s, left_date = %s 
+            WHERE team_id = %s AND player_id = %s
+        '''
+        
+        cursor.execute(query, (jersey_num, left_date, team_id, player_id))
+        db.get_db().commit()
+        the_response = make_response(jsonify(updated_player), 200)
+        return the_response
+    except Exception as e:
+        current_app.logger.error(f'Error updating team player: {e}')
+        return make_response(jsonify({"error": "Failed to update team player"}), 500)
     
-    cursor.execute(query, (jersey_num, left_date, team_id, player_id))
-    db.get_db().commit()
-
-    the_response = make_response(jsonify(updated_player), 200)
-    return the_response
