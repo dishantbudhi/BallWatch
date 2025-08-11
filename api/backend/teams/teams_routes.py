@@ -6,12 +6,12 @@ from flask import Blueprint, request, jsonify, make_response, current_app, redir
 import json
 from backend.db_connection import db
 
-teams_routes = Blueprint('teams_routes', __name__)
+teams = Blueprint('teams', __name__)
 
 
 #------------------------------------------------------------
 # Get all teams [Johnny-1.2]
-@teams_routes.route('/teams', methods=['GET'])
+@teams.route('/teams', methods=['GET'])
 def get_teams():
     """
     Get all teams with optional filters.
@@ -89,7 +89,7 @@ def get_teams():
 
 #------------------------------------------------------------
 # Update team info (coach, systems) [Mike-2.1]
-@teams_routes.route('/teams/<int:team_id>', methods=['PUT'])
+@teams.route('/teams/<int:team_id>', methods=['PUT'])
 def update_team(team_id):
     """
     Update team information.
@@ -160,7 +160,7 @@ def update_team(team_id):
 
 #------------------------------------------------------------
 # Get team information by ID
-@teams_routes.route('/teams/<int:team_id>', methods=['GET'])
+@teams.route('/teams/<int:team_id>', methods=['GET'])
 def get_team_by_id(team_id):
     """
     Get detailed information for a specific team.
@@ -233,7 +233,7 @@ def get_team_by_id(team_id):
 
 #------------------------------------------------------------
 # Get current team roster [Marcus-3.3, Andre-4.2]
-@teams_routes.route('/teams/<int:team_id>/players', methods=['GET'])
+@teams.route('/teams/<int:team_id>/players', methods=['GET'])
 def get_team_players(team_id):
     """
     Get current team roster with detailed player information.
@@ -339,7 +339,7 @@ def get_team_players(team_id):
 
 #------------------------------------------------------------
 # Add player to roster [Mike-2.2]
-@teams_routes.route('/teams/<int:team_id>/players', methods=['POST'])
+@teams.route('/teams/<int:team_id>/players', methods=['POST'])
 def add_team_player(team_id):
     """
     Add a player to team roster.
@@ -406,7 +406,7 @@ def add_team_player(team_id):
 
 #------------------------------------------------------------
 # Update player's status on team [Mike-2.1, Johnny-1.6]
-@teams_routes.route('/teams/<int:team_id>/players/<int:player_id>', methods=['PUT'])
+@teams.route('/teams/<int:team_id>/players/<int:player_id>', methods=['PUT'])
 def update_team_player(team_id, player_id):
     """
     Update player's status on team (jersey number, left date, etc.).
@@ -490,7 +490,7 @@ def update_team_player(team_id, player_id):
 
 #------------------------------------------------------------
 # Remove player from team roster
-@teams_routes.route('/teams/<int:team_id>/players/<int:player_id>', methods=['DELETE'])
+@teams.route('/teams/<int:team_id>/players/<int:player_id>', methods=['DELETE'])
 def remove_team_player(team_id, player_id):
     """
     Remove a player from team roster (sets left_date to current date).
