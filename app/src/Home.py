@@ -38,40 +38,60 @@ st.title('BallWatch Basketball Analytics Application')
 st.write('\n\n')
 st.write('### Select a user to log in:')
 
-# For each of the user personas for which we are implementing
-# functionality, we put a button on the screen that the user 
-# can click to MIMIC logging in as that mock user. 
+# Create a dropdown menu for user selection
+user_options = {
+    "Johnny Evans - The Superfan": {
+        "role": "superfan",
+        "first_name": "Johnny",
+        "page": "pages/00_Pol_Strat_Home.py", #update this
+        "bio": "Johnny Evans (25M) is an avid basketball fan who stays up to date with all his favorite players and teams. He finds typical basketball media sources too surface-level and appreciates an analytical approach to the game. On top of this, he likes to do some sports betting in his free time, and is always looking to find an edge."
+    },
+    "Mike Lewis - Data Engineer": {
+        "role": "data_engineer", 
+        "first_name": "Mike",
+        "page": "pages/10_USAID_Worker_Home.py", #update this
+        "bio": "Mike has a B.S. in Computer Science and 7 years of experience as a data engineer, specializing in real-time data pipelines and sports analytics. He's passionate about basketball and joined BallWatch to help elevate the game through better backend systems. Mike's primary responsibility is to ensure that BallWatch's data infrastructure stays reliable, accurate, and scalable. He manages ingestion from live APIs, updates datasets post-game, and occasionally runs manual queries for analysts or coaches. He also supports feature development by designing new tables or optimizing old ones."
+    },
+    "Marcus Thompson - Head Coach": {
+        "role": "head_coach",
+        "first_name": "Marcus", 
+        "page": "pages/30_Head_Coach_Home.py", #update this
+        "bio": "Marcus Thompson is the new head coach of the Nets, and together with the new GM, he wants to bring analytical basketball to Brooklyn. During his previous head coaching stints, he was often bogged down by dense spreadsheets and large PDF reports that were difficult to digest in between games. To coach effectively, he needs actionable insights and clear recommendations that help him plan strategies and make adjustments on the fly. This approach allows him to communicate confidently with his players while making decisions he knows are backed by solid statistics."
+    },
+    "Andre Wu - General Manager": {
+        "role": "general_manager",
+        "first_name": "Andre", 
+        "page": "pages/20_Admin_Home.py", #update this
+        "bio": "Andre Wu is the new general manager for the Brooklyn Nets. Historically plagued with losing seasons, Brooklyn is tired of losing and has high expectations for Andre Wu in his first season as the organization's general. Andre Wu plans to rely heavily on advanced analytics and statistics to help rebuild the Nets organization."
+    }
+}
 
-if st.button("Act as John, a Political Strategy Advisor", 
-            type = 'primary', 
-            use_container_width=True):
-    # when user clicks the button, they are now considered authenticated
-    st.session_state['authenticated'] = True
-    # we set the role of the current user
-    st.session_state['role'] = 'pol_strat_advisor'
-    # we add the first name of the user (so it can be displayed on 
-    # subsequent pages). 
-    st.session_state['first_name'] = 'John'
-    # finally, we ask streamlit to switch to another page, in this case, the 
-    # landing page for this particular user type
-    logger.info("Logging in as Political Strategy Advisor Persona")
-    st.switch_page('pages/00_Pol_Strat_Home.py')
+selected_user = st.selectbox(
+    "Choose a user:",
+    options=list(user_options.keys()),
+    index=0
+)
 
-if st.button('Act as Mohammad, an USAID worker', 
-            type = 'primary', 
-            use_container_width=True):
-    st.session_state['authenticated'] = True
-    st.session_state['role'] = 'usaid_worker'
-    st.session_state['first_name'] = 'Mohammad'
-    st.switch_page('pages/10_USAID_Worker_Home.py')
+# Display bio for selected user
+if selected_user:
+    user_info = user_options[selected_user]
+    st.write("---")
+    st.write(f"**About {user_info['first_name']}:**")
+    st.write(user_info['bio'])
+    st.write("---")
 
-if st.button('Act as System Administrator', 
-            type = 'primary', 
-            use_container_width=True):
-    st.session_state['authenticated'] = True
-    st.session_state['role'] = 'administrator'
-    st.session_state['first_name'] = 'SysAdmin'
-    st.switch_page('pages/20_Admin_Home.py')
-
-
-
+# Login button
+if st.button("Login", type='primary', use_container_width=True):
+    if selected_user:
+        user_info = user_options[selected_user]
+        
+        # Set session state variables
+        st.session_state['authenticated'] = True
+        st.session_state['role'] = user_info['role']
+        st.session_state['first_name'] = user_info['first_name']
+        
+        # Log the login action
+        logger.info(f"Logging in as {selected_user}")
+        
+        # Navigate to the appropriate page
+        st.switch_page(user_info['page'])
