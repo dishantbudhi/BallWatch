@@ -7,17 +7,17 @@ from modules.nav import SideBarLinks
 st.set_page_config(layout='wide')
 SideBarLinks()
 
-st.title(f"Welcome Head Coach, {st.session_state.get('first_name', 'Guest')}.")
+st.title(f"Welcome Super Fan, {st.session_state.get('first_name', 'Guest')}.")
 st.write('')
 st.write('')
 st.write('### What would you like to do today?')
 
-if st.button('Opponent Scouting',
+if st.button('Game Stats',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/21_Scouting_Reports.py')
 
-if st.button('Lineup Analysis',
+if st.button('Player Stats',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/22_Lineup_Analysis.py')
+    st.switch_page('pages/11_Player_Stats.py')

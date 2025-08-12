@@ -14,50 +14,49 @@ games = Blueprint('games', __name__)
 @games.route('/games', methods=['GET'])
 def get_games():
     """
-    Get games list with optional filters.
-    Query parameters:
-    - team_id: filter by team (home or away)
-    - start_date: filter games from this date (YYYY-MM-DD)
-    - end_date: filter games until this date (YYYY-MM-DD)
-    - season: filter by season
-    - game_type: filter by game type ('regular', 'playoff')
-    - status: filter by status ('scheduled', 'in_progress', 'completed')
+    Filters:
+    - team_id: int (home or away)
+    - start_date / end_date: YYYY-MM-DD  (matches Game.date)
+    - season: string
+    - game_type: 'regular' | 'playoff'   (maps to is_playoff 0/1)
+    - status: 'scheduled' | 'completed'  (derived: scheduled => future/zero scores)
     """
     try:
         current_app.logger.info('GET /games handler')
-        
-        # Get filter parameters
-        team_id = request.args.get('team_id', type=int)
+
+        team_id    = request.args.get('team_id', type=int)
         start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        season = request.args.get('season')
-        game_type = request.args.get('game_type')
-        status = request.args.get('status')
-        
+        end_date   = request.args.get('end_date')
+        season     = request.args.get('season')
+        game_type  = request.args.get('game_type')  # regular | playoff
+        status     = request.args.get('status')     # scheduled | completed (derived)
+
         cursor = db.get_db().cursor()
-        
-        # Build the query with optional filters
+
+        # Base query with only valid columns from your schema
         query = '''
-            SELECT 
+            SELECT
                 g.game_id,
-                g.game_date,
-                g.game_time,
+                g.date AS game_date,
+                g.season,
+                g.is_playoff,
+                CASE WHEN g.is_playoff = 1 THEN 'playoff' ELSE 'regular' END AS game_type,
                 g.home_team_id,
                 g.away_team_id,
                 ht.name AS home_team_name,
-                ht.city AS home_team_city,
+                ht.abrv AS home_team_abrv,
                 at.name AS away_team_name,
-                at.city AS away_team_city,
+                at.abrv AS away_team_abrv,
                 g.home_score,
                 g.away_score,
-                g.season,
-                g.game_type,
-                g.status,
-                g.attendance,
-                g.venue,
-                CASE 
-                    WHEN g.status = 'completed' AND g.home_score > g.away_score THEN ht.name
-                    WHEN g.status = 'completed' AND g.away_score > g.home_score THEN at.name
+                -- Derive a simple status without a status column:
+                CASE
+                    WHEN (g.date >= CURDATE() AND g.home_score = 0 AND g.away_score = 0) THEN 'scheduled'
+                    ELSE 'completed'
+                END AS status,
+                CASE
+                    WHEN g.home_score > g.away_score THEN ht.name
+                    WHEN g.away_score > g.home_score THEN at.name
                     ELSE NULL
                 END AS winner
             FROM Game g
@@ -65,47 +64,49 @@ def get_games():
             JOIN Teams at ON g.away_team_id = at.team_id
             WHERE 1=1
         '''
-        
+
         params = []
-        
+
         if team_id:
             query += ' AND (g.home_team_id = %s OR g.away_team_id = %s)'
             params.extend([team_id, team_id])
-        
+
         if start_date:
-            query += ' AND g.game_date >= %s'
+            query += ' AND g.date >= %s'
             params.append(start_date)
-        
+
         if end_date:
-            query += ' AND g.game_date <= %s'
+            query += ' AND g.date <= %s'
             params.append(end_date)
-        
+
         if season:
             query += ' AND g.season = %s'
             params.append(season)
-        
+
         if game_type:
-            query += ' AND g.game_type = %s'
-            params.append(game_type)
-        
+            is_playoff = 1 if game_type.lower() == 'playoff' else 0
+            query += ' AND g.is_playoff = %s'
+            params.append(is_playoff)
+
+        # Filter on derived status by wrapping as a subquery
         if status:
-            query += ' AND g.status = %s'
-            params.append(status)
-        
-        query += ' ORDER BY g.game_date DESC, g.game_time DESC'
-        
+            query = f"SELECT * FROM ({query}) AS q WHERE q.status = %s"
+            params.append(status.lower())
+
+        query += ' ORDER BY game_date DESC, game_id DESC'
+
+        current_app.logger.debug("SQL: %s | params: %s", query, params)
         cursor.execute(query, params)
-        theData = cursor.fetchall()
-        
-        # Get summary statistics
-        completed_games = [g for g in theData if g['status'] == 'completed']
-        scheduled_games = [g for g in theData if g['status'] == 'scheduled']
-        
-        response_data = {
-            'games': theData,
-            'total_games': len(theData),
-            'completed_games': len(completed_games),
-            'scheduled_games': len(scheduled_games),
+        rows = cursor.fetchall()
+
+        completed = [r for r in rows if r['status'] == 'completed']
+        scheduled = [r for r in rows if r['status'] == 'scheduled']
+
+        return make_response(jsonify({
+            'games': rows,
+            'total_games': len(rows),
+            'completed_games': len(completed),
+            'scheduled_games': len(scheduled),
             'filters_applied': {
                 'team_id': team_id,
                 'start_date': start_date,
@@ -114,15 +115,13 @@ def get_games():
                 'game_type': game_type,
                 'status': status
             }
-        }
-        
-        the_response = make_response(jsonify(response_data))
-        the_response.status_code = 200
-        return the_response
-        
+        }), 200)
+
     except Exception as e:
-        current_app.logger.error(f'Error fetching games: {e}')
+        import traceback
+        current_app.logger.error("Error fetching games: %s\n%s", e, traceback.format_exc())
         return make_response(jsonify({"error": "Failed to fetch games"}), 500)
+
 
 
 #------------------------------------------------------------

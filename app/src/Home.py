@@ -43,7 +43,7 @@ user_options = {
     "Johnny Evans - The Superfan": {
         "role": "superfan",
         "first_name": "Johnny",
-        "page": "pages/00_Pol_Strat_Home.py", #update this
+        "page": "pages/10_Superfan_Home.py", #update this
         "bio": "Johnny Evans (25M) is an avid basketball fan who stays up to date with all his favorite players and teams. He finds typical basketball media sources too surface-level and appreciates an analytical approach to the game. On top of this, he likes to do some sports betting in his free time, and is always looking to find an edge."
     },
     "Mike Lewis - Data Engineer": {
