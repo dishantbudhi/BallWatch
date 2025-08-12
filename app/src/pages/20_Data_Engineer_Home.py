@@ -11,15 +11,6 @@ st.write('')
 st.write('')
 st.write('### What would you like to do today?')
 
-"""
-As a data engineer, I need to UPDATE player and team stats in the database nightly so users always access the most recent analytics. 
-As a data engineer, I need to INSERT new rookie player profiles with scouting data so coaches can track them before their NBA debut. 
-As a data engineer, I need to DELETE duplicate or erroneous data entries from staging tables so that data integrity is maintained before production loads.
-As a data engineer, I need to view data quality validation reports so I can ensure accurate stats are available for analysis.
-As a data engineer, I need to monitor system performance metrics so I can identify and fix issues before they affect users.
-As a data engineer, I need to DELETE error logs and failed data loads older than 30 days so storage remains optimized.
-"""
-
 if st.button('Data Pipelines',
              type='primary',
              use_container_width=True):

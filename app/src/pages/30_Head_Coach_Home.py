@@ -21,3 +21,8 @@ if st.button('Lineup Analysis',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/32_Lineup_Analysis.py')
+
+if st.button('Access Season Summaries',
+             type='primary',
+             use_container_width=True):
+    st.switch_page('pages/33_Season_Summaries.py')

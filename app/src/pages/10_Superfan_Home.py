@@ -12,12 +12,17 @@ st.write('')
 st.write('')
 st.write('### What would you like to do today?')
 
-if st.button('Opponent Scouting',
+if st.button('View Player Stats',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/21_Scouting_Reports.py')
+    st.switch_page('pages/11_Player_Stats.py')
 
-if st.button('Lineup Analysis',
+if st.button('Player Comparisons',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/22_Lineup_Analysis.py')
+    st.switch_page('pages/12_Player_Comparison.py')
+
+if st.button('Historical Game Results',
+             type='primary',
+             use_container_width=True):
+    st.switch_page('pages/13_Historical_Game_Results.py')

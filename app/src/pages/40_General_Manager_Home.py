@@ -1,6 +1,6 @@
+import logging
 logger = logging.getLogger(__name__)
 
-Python
 import streamlit as st
 from modules.nav import SideBarLinks
 
@@ -12,12 +12,17 @@ st.write('')
 st.write('')
 st.write('### What would you like to do today?')
 
-if st.button('Player Valuation',
+if st.button('Track Player Progress',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/general_manager/31_Player_Valuation.py')
+    st.switch_page('pages/general_manager/41_Player_Progress.py')
 
-if st.button('Draft Analysis',
+if st.button('Update Draft Rankings',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/general_manager/32_Draft_Analysis.py')
+    st.switch_page('pages/general_manager/42_Draft_Rankings.py')
+
+if st.button('Analyze Contract Efficiency',
+             type='primary',
+             use_container_width=True):
+    st.switch_page('pages/general_manager/43_Contract_Efficiency.py')
