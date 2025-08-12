@@ -9,3 +9,5 @@ SideBarLinks()
 st.title('Draft Analysis')
 st.write("This page will provide tools for draft analysis and player evaluation.")
 # Add your draft analysis code here
+
+
