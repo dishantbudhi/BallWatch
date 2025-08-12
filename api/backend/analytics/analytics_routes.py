@@ -1,5 +1,5 @@
 ########################################################
-# Analytics Blueprint
+# Analytics Blueprint - FIXED VERSION
 # Performance analytics, matchups, and comparisons
 ########################################################
 from flask import Blueprint, request, jsonify, make_response, current_app
@@ -281,71 +281,30 @@ def get_lineup_configurations():
         
         cursor = db.get_db().cursor()
         
-        # Get lineup combinations and their effectiveness
-        # This is a simplified version - in reality, you'd need a more complex query
-        # to track actual 5-player lineups
+        # Get lineup configurations and their effectiveness
         query = '''
             SELECT 
-                p.position,
-                COUNT(DISTINCT pgs.game_id) AS games_together,
-                ROUND(AVG(pgs.points), 1) AS avg_points,
-                ROUND(AVG(pgs.plus_minus), 1) AS avg_plus_minus,
-                ROUND(AVG(pgs.shooting_percentage), 3) AS avg_shooting_pct
-            FROM Players p
-            JOIN TeamsPlayers tp ON p.player_id = tp.player_id
-            JOIN PlayerGameStats pgs ON p.player_id = pgs.player_id
-            JOIN Game g ON pgs.game_id = g.game_id
-            WHERE tp.team_id = %s AND tp.left_date IS NULL
-        '''
-        
-        params = [team_id]
-        
-        if season:
-            query += ' AND g.season = %s'
-            params.append(season)
-        
-        query += '''
-            GROUP BY p.position
-            HAVING games_together >= %s
-            ORDER BY avg_plus_minus DESC
-        '''
-        
-        params.append(min_games)
-        
-        cursor.execute(query, params)
-        position_stats = cursor.fetchall()
-        
-        # Get top performing player combinations (simplified)
-        cursor.execute('''
-            SELECT 
-                p1.first_name AS player1_first,
-                p1.last_name AS player1_last,
-                p2.first_name AS player2_first,
-                p2.last_name AS player2_last,
-                COUNT(DISTINCT g.game_id) AS games_together,
-                ROUND(AVG(pgs1.plus_minus + pgs2.plus_minus) / 2, 1) AS avg_combined_plus_minus
-            FROM PlayerGameStats pgs1
-            JOIN PlayerGameStats pgs2 ON pgs1.game_id = pgs2.game_id
-            JOIN Players p1 ON pgs1.player_id = p1.player_id
-            JOIN Players p2 ON pgs2.player_id = p2.player_id
-            JOIN TeamsPlayers tp1 ON p1.player_id = tp1.player_id
-            JOIN TeamsPlayers tp2 ON p2.player_id = tp2.player_id
-            JOIN Game g ON pgs1.game_id = g.game_id
-            WHERE tp1.team_id = %s AND tp2.team_id = %s
-            AND tp1.left_date IS NULL AND tp2.left_date IS NULL
-            AND pgs1.player_id < pgs2.player_id
-            GROUP BY p1.player_id, p2.player_id, p1.first_name, p1.last_name, p2.first_name, p2.last_name
-            HAVING games_together >= %s
-            ORDER BY avg_combined_plus_minus DESC
+                lc.lineup_id,
+                GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) ORDER BY pl.position_in_lineup) AS lineup,
+                lc.plus_minus,
+                lc.offensive_rating,
+                lc.defensive_rating,
+                COUNT(DISTINCT lc.quarter) AS quarters_played
+            FROM LineupConfiguration lc
+            JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
+            JOIN Players p ON p.player_id = pl.player_id
+            WHERE lc.team_id = %s
+            GROUP BY lc.lineup_id, lc.plus_minus, lc.offensive_rating, lc.defensive_rating
+            ORDER BY lc.plus_minus DESC
             LIMIT 10
-        ''', (team_id, team_id, min_games))
+        '''
         
-        top_duos = cursor.fetchall()
+        cursor.execute(query, [team_id])
+        lineup_stats = cursor.fetchall()
         
         response_data = {
             'team_id': team_id,
-            'position_effectiveness': position_stats,
-            'top_player_duos': top_duos,
+            'lineup_effectiveness': lineup_stats,
             'filters': {
                 'min_games': min_games,
                 'season': season
@@ -410,21 +369,13 @@ def get_season_summaries():
                     ROUND(AVG(CASE 
                         WHEN g.home_team_id = %s THEN g.away_score 
                         ELSE g.home_score 
-                    END), 1) AS avg_points_allowed,
-                    MAX(CASE 
-                        WHEN g.home_team_id = %s THEN g.home_score 
-                        ELSE g.away_score 
-                    END) AS highest_score,
-                    MIN(CASE 
-                        WHEN g.home_team_id = %s THEN g.home_score 
-                        ELSE g.away_score 
-                    END) AS lowest_score
+                    END), 1) AS avg_points_allowed
                 FROM Teams t
                 JOIN Game g ON (g.home_team_id = t.team_id OR g.away_team_id = t.team_id)
                 WHERE t.team_id = %s AND g.status = 'completed'
             '''
             
-            params = [entity_id] * 9
+            params = [entity_id] * 7
             
             if season:
                 query += ' AND g.season = %s'
@@ -434,30 +385,6 @@ def get_season_summaries():
             
             cursor.execute(query, params)
             summary = cursor.fetchone()
-            
-            # Get top performers
-            cursor.execute('''
-                SELECT 
-                    p.player_id,
-                    p.first_name,
-                    p.last_name,
-                    p.position,
-                    COUNT(pgs.game_id) AS games_played,
-                    ROUND(AVG(pgs.points), 1) AS avg_points,
-                    ROUND(AVG(pgs.rebounds), 1) AS avg_rebounds,
-                    ROUND(AVG(pgs.assists), 1) AS avg_assists
-                FROM Players p
-                JOIN TeamsPlayers tp ON p.player_id = tp.player_id
-                JOIN PlayerGameStats pgs ON p.player_id = pgs.player_id
-                JOIN Game g ON pgs.game_id = g.game_id
-                WHERE tp.team_id = %s AND tp.left_date IS NULL
-                AND g.status = 'completed'
-                GROUP BY p.player_id, p.first_name, p.last_name, p.position
-                ORDER BY avg_points DESC
-                LIMIT 5
-            ''', (entity_id,))
-            
-            top_players = cursor.fetchall()
             
         else:  # entity_type == 'player'
             # Get player season summary
@@ -473,7 +400,6 @@ def get_season_summaries():
                     ROUND(AVG(pgs.assists), 1) AS avg_assists,
                     ROUND(AVG(pgs.steals), 1) AS avg_steals,
                     ROUND(AVG(pgs.blocks), 1) AS avg_blocks,
-                    ROUND(AVG(pgs.shooting_percentage), 3) AS avg_shooting_pct,
                     ROUND(AVG(pgs.plus_minus), 1) AS avg_plus_minus,
                     ROUND(AVG(pgs.minutes_played), 1) AS avg_minutes,
                     SUM(pgs.points) AS total_points,
@@ -497,15 +423,12 @@ def get_season_summaries():
             
             cursor.execute(query, params)
             summary = cursor.fetchone()
-            
-            top_players = None
         
         response_data = {
             'entity_type': entity_type,
             'entity_id': entity_id,
             'season': season if season else 'current',
-            'summary': summary,
-            'top_players': top_players if entity_type == 'team' else None
+            'summary': summary
         }
         
         the_response = make_response(jsonify(response_data))

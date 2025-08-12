@@ -1,11 +1,12 @@
 ########################################################
-# Games Blueprint
+# Games Blueprint - FIXED VERSION
 # Game scheduling, scores, and management
 ########################################################
 from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db
 from datetime import datetime, timedelta
 
+# CREATE THE BLUEPRINT FIRST
 games = Blueprint('games', __name__)
 
 
@@ -36,12 +37,12 @@ def get_games():
         
         cursor = db.get_db().cursor()
         
-        # Build the query with optional filters
+        # Build the query using correct schema column names
         query = '''
             SELECT 
                 g.game_id,
                 g.game_date,
-                g.game_time,
+                TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
                 g.home_team_id,
                 g.away_team_id,
                 ht.name AS home_team_name,
@@ -56,8 +57,8 @@ def get_games():
                 g.attendance,
                 g.venue,
                 CASE 
-                    WHEN g.status = 'completed' AND g.home_score > g.away_score THEN ht.name
-                    WHEN g.status = 'completed' AND g.away_score > g.home_score THEN at.name
+                    WHEN g.home_score > g.away_score THEN ht.name
+                    WHEN g.away_score > g.home_score THEN at.name
                     ELSE NULL
                 END AS winner
             FROM Game g
@@ -92,20 +93,22 @@ def get_games():
             query += ' AND g.status = %s'
             params.append(status)
         
-        query += ' ORDER BY g.game_date DESC, g.game_time DESC'
+        query += ' ORDER BY g.game_date DESC'
         
         cursor.execute(query, params)
         theData = cursor.fetchall()
         
         # Get summary statistics
-        completed_games = [g for g in theData if g['status'] == 'completed']
-        scheduled_games = [g for g in theData if g['status'] == 'scheduled']
+        completed_games = len([g for g in theData if g['status'] == 'completed'])
+        scheduled_games = len([g for g in theData if g['status'] == 'scheduled'])
+        in_progress_games = len([g for g in theData if g['status'] == 'in_progress'])
         
         response_data = {
             'games': theData,
             'total_games': len(theData),
-            'completed_games': len(completed_games),
-            'scheduled_games': len(scheduled_games),
+            'completed_games': completed_games,
+            'scheduled_games': scheduled_games,
+            'in_progress_games': in_progress_games,
             'filters_applied': {
                 'team_id': team_id,
                 'start_date': start_date,
@@ -122,7 +125,7 @@ def get_games():
         
     except Exception as e:
         current_app.logger.error(f'Error fetching games: {e}')
-        return make_response(jsonify({"error": "Failed to fetch games"}), 500)
+        return make_response(jsonify({"error": f"Failed to fetch games: {str(e)}"}), 500)
 
 
 #------------------------------------------------------------
@@ -134,13 +137,14 @@ def create_game():
     Expected JSON body:
     {
         "game_date": "YYYY-MM-DD" (required),
-        "game_time": "HH:MM:SS" (required),
+        "game_time": "HH:MM:SS" (optional),
         "home_team_id": int (required),
         "away_team_id": int (required),
         "season": "string" (required),
         "game_type": "regular|playoff" (default: "regular"),
-        "venue": "string",
-        "status": "scheduled|in_progress|completed" (default: "scheduled")
+        "status": "scheduled|in_progress|completed" (default: "scheduled"),
+        "venue": "string" (optional),
+        "attendance": int (optional)
     }
     """
     try:
@@ -149,7 +153,7 @@ def create_game():
         game_data = request.get_json()
         
         # Validate required fields
-        required_fields = ['game_date', 'game_time', 'home_team_id', 'away_team_id', 'season']
+        required_fields = ['game_date', 'home_team_id', 'away_team_id', 'season']
         for field in required_fields:
             if field not in game_data:
                 return make_response(jsonify({"error": f"Missing required field: {field}"}), 400)
@@ -157,6 +161,16 @@ def create_game():
         # Validate teams exist and are different
         if game_data['home_team_id'] == game_data['away_team_id']:
             return make_response(jsonify({"error": "Home and away teams must be different"}), 400)
+        
+        # Validate game_type if provided
+        valid_game_types = ['regular', 'playoff']
+        if 'game_type' in game_data and game_data['game_type'] not in valid_game_types:
+            return make_response(jsonify({"error": f"Invalid game_type. Must be one of: {valid_game_types}"}), 400)
+        
+        # Validate status if provided
+        valid_statuses = ['scheduled', 'in_progress', 'completed']
+        if 'status' in game_data and game_data['status'] not in valid_statuses:
+            return make_response(jsonify({"error": f"Invalid status. Must be one of: {valid_statuses}"}), 400)
         
         cursor = db.get_db().cursor()
         
@@ -178,25 +192,26 @@ def create_game():
         if cursor.fetchone():
             return make_response(jsonify({"error": "Game already exists for these teams on this date"}), 409)
         
-        # Insert new game
+        # Insert new game using correct schema columns
         query = '''
             INSERT INTO Game (
                 game_date, game_time, home_team_id, away_team_id, 
-                season, game_type, venue, status, home_score, away_score
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                home_score, away_score, season, game_type, status, venue, attendance
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         '''
         
         values = (
             game_data['game_date'],
-            game_data['game_time'],
+            game_data.get('game_time'),
             game_data['home_team_id'],
             game_data['away_team_id'],
+            game_data.get('home_score', 0),
+            game_data.get('away_score', 0),
             game_data['season'],
             game_data.get('game_type', 'regular'),
-            game_data.get('venue'),
             game_data.get('status', 'scheduled'),
-            0,  # Initial home_score
-            0   # Initial away_score
+            game_data.get('venue'),
+            game_data.get('attendance')
         )
         
         cursor.execute(query, values)
@@ -227,9 +242,11 @@ def update_game(game_id):
         "game_time": "HH:MM:SS",
         "home_score": int,
         "away_score": int,
+        "season": "string",
+        "game_type": "regular|playoff",
         "status": "scheduled|in_progress|completed",
-        "attendance": int,
-        "venue": "string"
+        "venue": "string",
+        "attendance": int
     }
     """
     try:
@@ -247,12 +264,25 @@ def update_game(game_id):
         if not cursor.fetchone():
             return make_response(jsonify({"error": "Game not found"}), 404)
         
-        # Build dynamic update query
+        # Validate game_type if provided
+        if 'game_type' in game_data:
+            valid_game_types = ['regular', 'playoff']
+            if game_data['game_type'] not in valid_game_types:
+                return make_response(jsonify({"error": f"Invalid game_type. Must be one of: {valid_game_types}"}), 400)
+        
+        # Validate status if provided
+        if 'status' in game_data:
+            valid_statuses = ['scheduled', 'in_progress', 'completed']
+            if game_data['status'] not in valid_statuses:
+                return make_response(jsonify({"error": f"Invalid status. Must be one of: {valid_statuses}"}), 400)
+        
+        # Build dynamic update query using correct schema columns
         update_fields = []
         values = []
         
+        # Map all possible fields that can be updated
         allowed_fields = ['game_date', 'game_time', 'home_score', 'away_score', 
-                         'status', 'attendance', 'venue']
+                         'season', 'game_type', 'status', 'venue', 'attendance']
         
         for field in allowed_fields:
             if field in game_data:
@@ -268,6 +298,9 @@ def update_game(game_id):
         
         if 'away_score' in game_data and game_data['away_score'] < 0:
             return make_response(jsonify({"error": "Away score cannot be negative"}), 400)
+        
+        if 'attendance' in game_data and game_data['attendance'] < 0:
+            return make_response(jsonify({"error": "Attendance cannot be negative"}), 400)
         
         query = f"UPDATE Game SET {', '.join(update_fields)} WHERE game_id = %s"
         values.append(game_id)
@@ -299,10 +332,21 @@ def get_game_details(game_id):
         
         cursor = db.get_db().cursor()
         
-        # Get game details
+        # Get game details using correct schema columns
         query = '''
             SELECT 
-                g.*,
+                g.game_id,
+                g.game_date,
+                TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
+                g.home_team_id,
+                g.away_team_id,
+                g.home_score,
+                g.away_score,
+                g.season,
+                g.game_type,
+                g.status,
+                g.attendance,
+                g.venue,
                 ht.name AS home_team_name,
                 ht.city AS home_team_city,
                 ht.coach AS home_team_coach,
@@ -324,7 +368,19 @@ def get_game_details(game_id):
         # Get player stats for this game
         cursor.execute('''
             SELECT 
-                pgs.*,
+                pgs.player_id,
+                pgs.game_id,
+                pgs.points,
+                pgs.rebounds,
+                pgs.assists,
+                pgs.steals,
+                pgs.blocks,
+                pgs.turnovers,
+                pgs.shooting_percentage,
+                pgs.three_point_percentage,
+                pgs.free_throw_percentage,
+                pgs.plus_minus,
+                pgs.minutes_played,
                 p.first_name,
                 p.last_name,
                 p.position,
@@ -386,18 +442,19 @@ def get_upcoming_games():
             SELECT 
                 g.game_id,
                 g.game_date,
-                g.game_time,
+                TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
                 g.home_team_id,
                 g.away_team_id,
                 ht.name AS home_team_name,
                 at.name AS away_team_name,
                 g.venue,
-                g.game_type
+                g.game_type,
+                g.status
             FROM Game g
             JOIN Teams ht ON g.home_team_id = ht.team_id
             JOIN Teams at ON g.away_team_id = at.team_id
             WHERE g.game_date BETWEEN %s AND %s
-            AND g.status = 'scheduled'
+            AND g.status IN ('scheduled', 'in_progress')
         '''
         
         params = [today, end_date]
@@ -427,3 +484,141 @@ def get_upcoming_games():
     except Exception as e:
         current_app.logger.error(f'Error fetching upcoming games: {e}')
         return make_response(jsonify({"error": "Failed to fetch upcoming games"}), 500)
+
+
+#------------------------------------------------------------
+# Delete a game [Admin function]
+@games.route('/games/<int:game_id>', methods=['DELETE'])
+def delete_game(game_id):
+    """
+    Delete a game (admin function).
+    This will cascade delete all related player stats.
+    """
+    try:
+        current_app.logger.info(f'DELETE /games/{game_id} handler')
+        
+        cursor = db.get_db().cursor()
+        
+        # Check if game exists
+        cursor.execute('SELECT game_id FROM Game WHERE game_id = %s', (game_id,))
+        if not cursor.fetchone():
+            return make_response(jsonify({"error": "Game not found"}), 404)
+        
+        # Delete the game (cascades to PlayerGameStats)
+        cursor.execute('DELETE FROM Game WHERE game_id = %s', (game_id,))
+        db.get_db().commit()
+        
+        return make_response(jsonify({
+            "message": "Game deleted successfully",
+            "game_id": game_id
+        }), 200)
+        
+    except Exception as e:
+        current_app.logger.error(f'Error deleting game: {e}')
+        db.get_db().rollback()
+        return make_response(jsonify({"error": "Failed to delete game"}), 500)
+
+
+#------------------------------------------------------------
+# Get team's schedule
+@games.route('/teams/<int:team_id>/schedule', methods=['GET'])
+def get_team_schedule(team_id):
+    """
+    Get a specific team's schedule.
+    Query parameters:
+    - season: optional season filter
+    - status: optional status filter
+    """
+    try:
+        current_app.logger.info(f'GET /teams/{team_id}/schedule handler')
+        
+        season = request.args.get('season')
+        status = request.args.get('status')
+        
+        cursor = db.get_db().cursor()
+        
+        # Check if team exists
+        cursor.execute('SELECT team_id, name FROM Teams WHERE team_id = %s', (team_id,))
+        team_info = cursor.fetchone()
+        
+        if not team_info:
+            return make_response(jsonify({"error": "Team not found"}), 404)
+        
+        query = '''
+            SELECT 
+                g.game_id,
+                g.game_date,
+                TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
+                g.home_team_id,
+                g.away_team_id,
+                CASE 
+                    WHEN g.home_team_id = %s THEN 'Home'
+                    ELSE 'Away'
+                END AS home_away,
+                CASE 
+                    WHEN g.home_team_id = %s THEN at.name
+                    ELSE ht.name
+                END AS opponent,
+                g.home_score,
+                g.away_score,
+                CASE 
+                    WHEN g.status = 'completed' THEN
+                        CASE 
+                            WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR 
+                                 (g.away_team_id = %s AND g.away_score > g.home_score) THEN 'W'
+                            ELSE 'L'
+                        END
+                    ELSE NULL
+                END AS result,
+                g.season,
+                g.game_type,
+                g.status,
+                g.venue
+            FROM Game g
+            JOIN Teams ht ON g.home_team_id = ht.team_id
+            JOIN Teams at ON g.away_team_id = at.team_id
+            WHERE (g.home_team_id = %s OR g.away_team_id = %s)
+        '''
+        
+        params = [team_id, team_id, team_id, team_id, team_id, team_id]
+        
+        if season:
+            query += ' AND g.season = %s'
+            params.append(season)
+        
+        if status:
+            query += ' AND g.status = %s'
+            params.append(status)
+        
+        query += ' ORDER BY g.game_date DESC'
+        
+        cursor.execute(query, params)
+        schedule = cursor.fetchall()
+        
+        # Calculate record if we have completed games
+        completed_games = [g for g in schedule if g['result'] is not None]
+        wins = len([g for g in completed_games if g['result'] == 'W'])
+        losses = len([g for g in completed_games if g['result'] == 'L'])
+        
+        response_data = {
+            'team_id': team_id,
+            'team_name': team_info['name'],
+            'schedule': schedule,
+            'record': {
+                'wins': wins,
+                'losses': losses,
+                'games_played': len(completed_games)
+            },
+            'filters': {
+                'season': season,
+                'status': status
+            }
+        }
+        
+        the_response = make_response(jsonify(response_data))
+        the_response.status_code = 200
+        return the_response
+        
+    except Exception as e:
+        current_app.logger.error(f'Error fetching team schedule: {e}')
+        return make_response(jsonify({"error": "Failed to fetch team schedule"}), 500)
