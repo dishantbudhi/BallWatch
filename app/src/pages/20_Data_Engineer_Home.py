@@ -21,4 +21,7 @@ if st.button('System Health',
              use_container_width=True):
     st.switch_page('pages/22_System_Health.py')
 
-# pick a third user story and add a page
+if st.button('Data Logs and Cleanup',
+                type='primary',
+                use_container_width=True):
+        st.switch_page('pages/23_Data_Cleanup.py')
