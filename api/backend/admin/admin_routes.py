@@ -1,21 +1,12 @@
 ########################################################
-# Admin Blueprint
-# System monitoring, data management, and error handling
+# Admin Blueprint - FIXED VERSION
+# System monitoring, data management, and error handling  
 ########################################################
-from flask import Blueprint
-from flask import request
-from flask import jsonify
-from flask import make_response
-from flask import current_app
-from flask import redirect
-from flask import url_for
-import json
+from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db
 from datetime import datetime, timedelta
+import json
 
-#------------------------------------------------------------
-# Create a new Blueprint object, which is a collection of 
-# routes.
 admin = Blueprint('admin', __name__)
 
 
@@ -447,115 +438,6 @@ def log_error():
 
 
 #------------------------------------------------------------
-# Update error status [Mike-2.3]
-@admin.route('/error-logs/<int:error_id>', methods=['PUT'])
-def update_error_log(error_id):
-    """
-    Update the status of an error log (mark as resolved).
-    Expected JSON body:
-    {
-        "resolved": boolean,
-        "resolved_by": "string",
-        "resolution_notes": "string"
-    }
-    """
-    current_app.logger.info(f'PUT /error-logs/{error_id} route')
-    
-    try:
-        update_data = request.get_json()
-        
-        if not update_data:
-            return make_response(jsonify({"error": "No update data provided"}), 400)
-        
-        cursor = db.get_db().cursor()
-        
-        # Build update query
-        update_fields = []
-        values = []
-        
-        if 'resolved' in update_data and update_data['resolved']:
-            update_fields.append('resolved_at = NOW()')
-            
-            if 'resolved_by' in update_data:
-                update_fields.append('resolved_by = %s')
-                values.append(update_data['resolved_by'])
-            
-            if 'resolution_notes' in update_data:
-                update_fields.append('resolution_notes = %s')
-                values.append(update_data['resolution_notes'])
-        
-        if update_fields:
-            query = f"UPDATE ErrorLogs SET {', '.join(update_fields)} WHERE error_id = %s"
-            values.append(error_id)
-            cursor.execute(query, values)
-            db.get_db().commit()
-        
-        return make_response(jsonify({
-            "message": "Error log updated successfully",
-            "error_id": error_id
-        }), 200)
-        
-    except Exception as e:
-        current_app.logger.error(f'Error updating error log: {e}')
-        db.get_db().rollback()
-        return make_response(jsonify({"error": "Failed to update error log"}), 500)
-
-
-#------------------------------------------------------------
-# Purge old error logs [Mike-2.6]
-@admin.route('/error-logs', methods=['DELETE'])
-def purge_error_logs():
-    """
-    Purge old error logs from the system.
-    Query parameters:
-    - days: delete logs older than this many days (required, min: 30)
-    - severity: only delete logs of this severity or lower
-    """
-    current_app.logger.info('DELETE /error-logs route')
-    
-    days = request.args.get('days', type=int)
-    severity = request.args.get('severity')
-    
-    if not days or days < 30:
-        return make_response(jsonify({"error": "Days parameter required and must be at least 30"}), 400)
-    
-    try:
-        cursor = db.get_db().cursor()
-        
-        # Build delete query
-        query = 'DELETE FROM ErrorLogs WHERE created_at < DATE_SUB(NOW(), INTERVAL %s DAY)'
-        params = [days]
-        
-        if severity:
-            # Delete only logs of specified severity or lower
-            severity_levels = {'info': 1, 'warning': 2, 'error': 3, 'critical': 4}
-            if severity in severity_levels:
-                query += ' AND severity IN (%s'
-                params.append('info')
-                if severity_levels[severity] >= 2:
-                    query += ', %s'
-                    params.append('warning')
-                if severity_levels[severity] >= 3:
-                    query += ', %s'
-                    params.append('error')
-                query += ')'
-        
-        cursor.execute(query, params)
-        deleted_count = cursor.rowcount
-        db.get_db().commit()
-        
-        return make_response(jsonify({
-            "message": "Error logs purged successfully",
-            "deleted_count": deleted_count
-        }), 200)
-        
-    except Exception as e:
-        current_app.logger.error(f'Error purging error logs: {e}')
-        db.get_db().rollback()
-        return make_response(jsonify({"error": "Failed to purge error logs"}), 500)
-
-
-#------------------------------------------------------------
 # Get data error details [Mike-2.4]
 @admin.route('/data-errors', methods=['GET'])
 def get_data_errors():
@@ -605,67 +487,15 @@ def get_data_errors():
     cursor.execute(query, params)
     theData = cursor.fetchall()
     
-    # Get error summary by table
-    cursor.execute('''
-        SELECT 
-            table_name,
-            error_type,
-            COUNT(*) as count
-        FROM DataErrors
-        WHERE detected_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            AND resolved_at IS NULL
-        GROUP BY table_name, error_type
-    ''', (days,))
-    
-    error_summary = cursor.fetchall()
-    
     response_data = {
         'errors': theData,
         'total_count': len(theData),
-        'error_summary': error_summary,
         'filter_days': days
     }
     
     the_response = make_response(jsonify(response_data))
     the_response.status_code = 200
     return the_response
-
-
-#------------------------------------------------------------
-# Remove resolved data errors [Mike-2.3]
-@admin.route('/data-errors', methods=['DELETE'])
-def remove_resolved_errors():
-    """
-    Remove resolved data errors from the system.
-    Query parameters:
-    - days: remove errors resolved more than this many days ago (default: 30)
-    """
-    current_app.logger.info('DELETE /data-errors route')
-    
-    days = request.args.get('days', 30, type=int)
-    
-    try:
-        cursor = db.get_db().cursor()
-        
-        query = '''
-            DELETE FROM DataErrors 
-            WHERE resolved_at IS NOT NULL 
-                AND resolved_at < DATE_SUB(NOW(), INTERVAL %s DAY)
-        '''
-        
-        cursor.execute(query, (days,))
-        deleted_count = cursor.rowcount
-        db.get_db().commit()
-        
-        return make_response(jsonify({
-            "message": "Resolved data errors removed successfully",
-            "deleted_count": deleted_count
-        }), 200)
-        
-    except Exception as e:
-        current_app.logger.error(f'Error removing data errors: {e}')
-        db.get_db().rollback()
-        return make_response(jsonify({"error": "Failed to remove data errors"}), 500)
 
 
 #------------------------------------------------------------
@@ -760,15 +590,6 @@ def schedule_cleanup():
         
         cursor = db.get_db().cursor()
         
-        # Check for existing active schedule of the same type
-        cursor.execute('''
-            SELECT schedule_id FROM CleanupSchedule 
-            WHERE cleanup_type = %s AND is_active = 1
-        ''', (cleanup_data['cleanup_type'],))
-        
-        if cursor.fetchone():
-            return make_response(jsonify({"error": "An active schedule for this cleanup type already exists"}), 409)
-        
         # Calculate next run if not provided
         if 'next_run' not in cleanup_data:
             if cleanup_data['frequency'] == 'daily':
@@ -808,70 +629,6 @@ def schedule_cleanup():
         current_app.logger.error(f'Error scheduling cleanup: {e}')
         db.get_db().rollback()
         return make_response(jsonify({"error": "Failed to schedule cleanup"}), 500)
-
-
-#------------------------------------------------------------
-# Update cleanup schedule [Mike-2.6]
-@admin.route('/data-cleanup/<int:schedule_id>', methods=['PUT'])
-def update_cleanup_schedule(schedule_id):
-    """
-    Update an existing cleanup schedule.
-    Expected JSON body (all fields optional):
-    {
-        "frequency": "string",
-        "next_run": "datetime string",
-        "retention_days": int,
-        "is_active": boolean
-    }
-    """
-    current_app.logger.info(f'PUT /data-cleanup/{schedule_id} route')
-    
-    try:
-        update_data = request.get_json()
-        
-        if not update_data:
-            return make_response(jsonify({"error": "No update data provided"}), 400)
-        
-        cursor = db.get_db().cursor()
-        
-        # Build dynamic update query
-        update_fields = []
-        values = []
-        
-        if 'frequency' in update_data:
-            valid_frequencies = ['daily', 'weekly', 'monthly']
-            if update_data['frequency'] not in valid_frequencies:
-                return make_response(jsonify({"error": f"Invalid frequency. Must be one of: {valid_frequencies}"}), 400)
-            update_fields.append('frequency = %s')
-            values.append(update_data['frequency'])
-        
-        if 'next_run' in update_data:
-            update_fields.append('next_run = %s')
-            values.append(update_data['next_run'])
-        
-        if 'retention_days' in update_data:
-            update_fields.append('retention_days = %s')
-            values.append(update_data['retention_days'])
-        
-        if 'is_active' in update_data:
-            update_fields.append('is_active = %s')
-            values.append(1 if update_data['is_active'] else 0)
-        
-        if update_fields:
-            query = f"UPDATE CleanupSchedule SET {', '.join(update_fields)} WHERE schedule_id = %s"
-            values.append(schedule_id)
-            cursor.execute(query, values)
-            db.get_db().commit()
-        
-        return make_response(jsonify({
-            "message": "Cleanup schedule updated successfully",
-            "schedule_id": schedule_id
-        }), 200)
-        
-    except Exception as e:
-        current_app.logger.error(f'Error updating cleanup schedule: {e}')
-        db.get_db().rollback()
-        return make_response(jsonify({"error": "Failed to update cleanup schedule"}), 500)
 
 
 #------------------------------------------------------------
@@ -919,25 +676,9 @@ def get_validation_reports():
     cursor.execute(query, params)
     theData = cursor.fetchall()
     
-    # Get validation summary
-    cursor.execute('''
-        SELECT 
-            table_name,
-            COUNT(*) as validation_count,
-            SUM(CASE WHEN status = 'passed' THEN 1 ELSE 0 END) as passed,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
-            SUM(CASE WHEN status = 'warning' THEN 1 ELSE 0 END) as warnings
-        FROM ValidationReports
-        WHERE run_date >= DATE_SUB(NOW(), INTERVAL %s DAY)
-        GROUP BY table_name
-    ''', (days,))
-    
-    validation_summary = cursor.fetchall()
-    
     response_data = {
         'reports': theData,
         'total_count': len(theData),
-        'summary': validation_summary,
         'filter_days': days
     }
     
@@ -973,7 +714,7 @@ def run_validation_check():
         
         cursor = db.get_db().cursor()
         
-        # Perform validation based on table_name
+        # Perform basic validation based on table_name
         table_name = validation_data['table_name']
         validation_type = validation_data['validation_type']
         
@@ -993,7 +734,7 @@ def run_validation_check():
                 FROM Teams
             ''')
         else:
-            # Generic count for other tables
+            # Generic count for other tables  
             cursor.execute(f'SELECT COUNT(*) as total, 0 as invalid FROM {table_name}')
         
         result = cursor.fetchone()

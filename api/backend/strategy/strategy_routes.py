@@ -1,5 +1,5 @@
 ########################################################
-# Strategy Blueprint
+# Strategy Blueprint - FIXED VERSION  
 # Game plans, draft evaluations, and strategic planning
 ########################################################
 from flask import Blueprint, request, jsonify, make_response, current_app
@@ -79,28 +79,9 @@ def get_game_plans():
         cursor.execute(query, params)
         game_plans = cursor.fetchall()
         
-        # Get suggested focus areas based on recent performance
-        cursor.execute('''
-            SELECT 
-                'Offensive Focus' AS area,
-                ROUND(AVG(CASE 
-                    WHEN g.home_team_id = %s THEN g.home_score 
-                    ELSE g.away_score 
-                END), 1) AS metric_value,
-                'Avg Points Scored' AS metric_name
-            FROM Game g
-            WHERE (g.home_team_id = %s OR g.away_team_id = %s)
-            AND g.status = 'completed'
-            ORDER BY g.game_date DESC
-            LIMIT 5
-        ''', (team_id, team_id, team_id))
-        
-        focus_areas = cursor.fetchall()
-        
         response_data = {
             'game_plans': game_plans,
             'total_plans': len(game_plans),
-            'suggested_focus_areas': focus_areas,
             'filters': {
                 'team_id': team_id,
                 'opponent_id': opponent_id,
@@ -351,25 +332,9 @@ def get_draft_evaluations():
         cursor.execute(query, params)
         evaluations = cursor.fetchall()
         
-        # Get top prospects by position
-        cursor.execute('''
-            SELECT 
-                p.position,
-                COUNT(*) AS count,
-                ROUND(AVG(de.overall_rating), 1) AS avg_rating
-            FROM DraftEvaluations de
-            JOIN Players p ON de.player_id = p.player_id
-            WHERE de.evaluation_type = 'prospect'
-            GROUP BY p.position
-            ORDER BY avg_rating DESC
-        ''')
-        
-        position_summary = cursor.fetchall()
-        
         response_data = {
             'evaluations': evaluations,
             'total_evaluations': len(evaluations),
-            'position_summary': position_summary,
             'filters': {
                 'position': position,
                 'min_age': min_age,
