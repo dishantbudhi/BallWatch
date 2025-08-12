@@ -21,3 +21,4 @@ if st.button('Draft Analysis',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/general_manager/32_Draft_Analysis.py')
+
