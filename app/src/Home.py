@@ -49,7 +49,7 @@ user_options = {
     "Mike Lewis - Data Engineer": {
         "role": "data_engineer", 
         "first_name": "Mike",
-        "page": "pages/10_USAID_Worker_Home.py", #update this
+        "page": "pages/20_Data_Engineer_Home.py", #update this
         "bio": "Mike has a B.S. in Computer Science and 7 years of experience as a data engineer, specializing in real-time data pipelines and sports analytics. He's passionate about basketball and joined BallWatch to help elevate the game through better backend systems. Mike's primary responsibility is to ensure that BallWatch's data infrastructure stays reliable, accurate, and scalable. He manages ingestion from live APIs, updates datasets post-game, and occasionally runs manual queries for analysts or coaches. He also supports feature development by designing new tables or optimizing old ones."
     },
     "Marcus Thompson - Head Coach": {
