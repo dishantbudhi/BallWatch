@@ -179,7 +179,7 @@ def get_data_loads():
         status_summary = cursor.fetchall()
         
         response_data = {
-            'data_loads': loads_data,
+            'loads': loads_data,
             'total_loads': len(loads_data),
             'status_summary': status_summary,
             'analysis_period_days': days
@@ -572,7 +572,7 @@ def get_data_errors():
         error_summary = cursor.fetchall()
         
         response_data = {
-            'data_errors': data_errors,
+            'errors': data_errors,
             'total_errors': len(data_errors),
             'error_breakdown': error_summary,
             'analysis_period_days': days

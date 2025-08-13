@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from datetime import datetime
 import logging
+import time
 from modules.nav import SideBarLinks
 
 logger = logging.getLogger(__name__)
@@ -12,24 +13,19 @@ st.set_page_config(
     layout="wide"
 )
 
-# Use the SideBarLinks function to control navigation
 SideBarLinks()
 
-# Initialize session state
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = 'http://api:4000/api'
+    st.session_state.api_base_url = 'http://api:4000/'
 
-# Add debug mode toggle to session state
 if 'debug_mode' not in st.session_state:
     st.session_state.debug_mode = False
 
-# API Helper Functions
 def api_get(endpoint):
     full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        # Only show debug info if debug mode is enabled
         if st.session_state.debug_mode:
-            with st.expander("🔍 Debug Info", expanded=False):
+            with st.expander("Debug Info", expanded=False):
                 st.write(f"**GET Request:** `{full_url}`")
                 st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
@@ -43,14 +39,11 @@ def api_get(endpoint):
                 logger.error(f"Invalid JSON response from {endpoint}")
                 return None
         else:
-            # Log the error but don't show verbose details to user
             logger.error(f"API Error {response.status_code} for {endpoint}: {response.text[:200]}")
             
-            # Show user-friendly error messages
             if response.status_code == 404:
                 st.error(f"Endpoint not found: {endpoint}")
             elif response.status_code == 500:
-                # Try to parse error message from response
                 try:
                     error_data = response.json()
                     error_msg = error_data.get('error', 'Server error occurred')
@@ -82,9 +75,8 @@ def api_get(endpoint):
 def api_post(endpoint, data):
     full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        # Only show debug info if debug mode is enabled
         if st.session_state.debug_mode:
-            with st.expander("🔍 Debug Info", expanded=False):
+            with st.expander("Debug Info", expanded=False):
                 st.write(f"**POST Request:** `{full_url}`")
                 st.write(f"**Payload:** {data}")
                 st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -104,10 +96,8 @@ def api_post(endpoint, data):
                 logger.error(f"Invalid JSON response from {endpoint}")
                 return None
         else:
-            # Log the error but don't show verbose details to user
             logger.error(f"API Error {response.status_code} for {endpoint}: {response.text[:200]}")
             
-            # Show user-friendly error messages
             if response.status_code == 404:
                 st.error(f"Endpoint not found: {endpoint}")
             elif response.status_code == 500:
@@ -137,9 +127,8 @@ def api_post(endpoint, data):
 def api_put(endpoint, data):
     full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        # Only show debug info if debug mode is enabled
         if st.session_state.debug_mode:
-            with st.expander("🔍 Debug Info", expanded=False):
+            with st.expander("Debug Info", expanded=False):
                 st.write(f"**PUT Request:** `{full_url}`")
                 st.write(f"**Payload:** {data}")
                 st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -159,10 +148,8 @@ def api_put(endpoint, data):
                 logger.error(f"Invalid JSON response from {endpoint}")
                 return None
         else:
-            # Log the error but don't show verbose details to user
             logger.error(f"API Error {response.status_code} for {endpoint}: {response.text[:200]}")
             
-            # Show user-friendly error messages
             if response.status_code == 404:
                 st.error("Resource not found.")
             elif response.status_code == 500:
@@ -189,7 +176,7 @@ st.markdown("Manage and monitor data loads for BallWatch")
 # Add debug mode toggle in sidebar
 with st.sidebar:
     st.divider()
-    st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.debug_mode)
+    st.session_state.debug_mode = st.checkbox("Debug Mode", value=st.session_state.debug_mode)
     if st.session_state.debug_mode:
         st.info("Debug mode enabled - verbose error details will be shown")
 
@@ -200,7 +187,7 @@ col1, col2, col3 = st.columns(3)
 with col1:
     if st.button("Load Player Stats", type="primary", use_container_width=True):
         with st.spinner("Starting player stats load..."):
-            result = api_post('/data-loads', {
+            result = api_post('/system/data-loads', {
                 'load_type': 'player_stats',
                 'initiated_by': 'Mike Lewis'
             })
@@ -211,7 +198,7 @@ with col1:
 with col2:
     if st.button("Load Game Data", type="primary", use_container_width=True):
         with st.spinner("Starting game data load..."):
-            result = api_post('/data-loads', {
+            result = api_post('/system/data-loads', {
                 'load_type': 'game_data', 
                 'initiated_by': 'Mike Lewis'
             })
@@ -222,7 +209,7 @@ with col2:
 with col3:
     if st.button("Load Team Data", type="primary", use_container_width=True):
         with st.spinner("Starting team data load..."):
-            result = api_post('/data-loads', {
+            result = api_post('/system/data-loads', {
                 'load_type': 'team_data',
                 'initiated_by': 'Mike Lewis'
             })
@@ -249,76 +236,66 @@ with col4:
 
 # Fetch data loads
 with st.spinner("Loading data..."):
-    loads_data = api_get('/data-loads')
+    endpoint = f'/system/data-loads?days={days_filter}'
+    if status_filter != "All":
+        endpoint += f'&status={status_filter}'
+    
+    loads_data = api_get(endpoint)
 
 if loads_data:
     loads = loads_data.get('loads', [])
     
+    if st.session_state.debug_mode:
+        with st.expander("Debug: Raw API Response"):
+            st.json(loads_data)
+    
     if loads:
         df = pd.DataFrame(loads)
         
-        # Apply filters
+        # Apply search filter
         if search_term:
             mask = df.apply(lambda x: search_term.lower() in str(x).lower(), axis=1)
             df = df[mask]
         
-        if status_filter != "All":
-            df = df[df['status'] == status_filter]
-        
         if not df.empty:
+            # Convert datetime strings to more readable format
+            if 'started_at' in df.columns:
+                df['started_at'] = pd.to_datetime(df['started_at']).dt.strftime('%Y-%m-%d %H:%M')
+            if 'completed_at' in df.columns:
+                df['completed_at'] = pd.to_datetime(df['completed_at']).dt.strftime('%Y-%m-%d %H:%M')
+            
             # Add status indicators
             df['status_display'] = df['status'].apply(
-                lambda x: f"🟢 {x.upper()}" if x == 'completed' 
-                else f"🔴 {x.upper()}" if x == 'failed'
-                else f"🔵 {x.upper()}" if x == 'running'
-                else f"🟡 {x.upper()}"
+                lambda x: f"COMPLETED" if x == 'completed' 
+                else f"FAILED" if x == 'failed'
+                else f"RUNNING" if x == 'running'
+                else f"PENDING"
             )
             
-            # Display table
+            # Display table with better column configuration
             st.dataframe(
                 df[['load_id', 'load_type', 'status_display', 'started_at', 'completed_at', 
                    'records_processed', 'records_failed', 'initiated_by']],
                 column_config={
-                    "load_id": "Load ID",
-                    "load_type": "Type", 
+                    "load_id": st.column_config.NumberColumn("Load ID", width="small"),
+                    "load_type": "Type",
                     "status_display": "Status",
                     "started_at": "Started",
                     "completed_at": "Completed",
-                    "records_processed": st.column_config.NumberColumn("Processed"),
-                    "records_failed": st.column_config.NumberColumn("Failed"),
+                    "records_processed": st.column_config.NumberColumn("Processed", format="%d"),
+                    "records_failed": st.column_config.NumberColumn("Failed", format="%d"),
                     "initiated_by": "Initiated By"
                 },
                 use_container_width=True,
                 hide_index=True
             )
             
-            # Handle running loads
+            # Handle running loads with auto-refresh
             running_loads = df[df['status'] == 'running']
             if not running_loads.empty:
-                st.info(f"⚠️ {len(running_loads)} load(s) currently running")
-                
-                for _, load in running_loads.iterrows():
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    with col1:
-                        st.write(f"**Load #{load['load_id']}:** {load['load_type']}")
-                    with col2:
-                        if st.button("Mark Complete", key=f"complete_{load['load_id']}"):
-                            result = api_put(f"/data-loads/{load['load_id']}", {
-                                'status': 'completed',
-                                'records_processed': load.get('records_processed', 0) + 100
-                            })
-                            if result:
-                                st.success("Load marked as complete!")
-                                st.rerun()
-                    with col3:
-                        if st.button("Mark Failed", key=f"fail_{load['load_id']}", type="secondary"):
-                            result = api_put(f"/data-loads/{load['load_id']}", {
-                                'status': 'failed',
-                                'error_message': 'Manually marked as failed'
-                            })
-                            if result:
-                                st.error("Load marked as failed")
-                                st.rerun()
+                st.info(f"{len(running_loads)} load(s) currently running. Page will auto-refresh.")
+                time.sleep(2)
+                st.rerun()
             
             # Summary metrics
             st.divider()
@@ -327,25 +304,26 @@ if loads_data:
             with col1:
                 st.metric("Total Loads", len(df))
             with col2:
-                completed = len(df[df['status'] == 'completed'])
-                st.metric("Completed", completed)
+                completed_loads = len(df[df['status'] == 'completed'])
+                st.metric("Completed", completed_loads)
             with col3:
-                failed = len(df[df['status'] == 'failed']) 
-                st.metric("Failed", failed)
+                failed_loads = len(df[df['status'] == 'failed'])
+                st.metric("Failed", failed_loads, delta=f"-{failed_loads}" if failed_loads > 0 else None)
             with col4:
-                if len(df) > 0:
-                    success_rate = (completed / len(df)) * 100
-                    st.metric("Success Rate", f"{success_rate:.1f}%")
-                else:
-                    st.metric("Success Rate", "0%")
+                total_processed = df['records_processed'].sum() if 'records_processed' in df.columns else 0
+                st.metric("Total Records", f"{total_processed:,}")
                     
         else:
-            st.info("No loads found matching your criteria")
+            st.info(f"No data loads found matching your filters.")
     else:
-        st.info("No data loads found. Start a new load using the buttons above.")
+        st.info("No data loads found in the database. Start a new load using the buttons above.")
+        
+        # Show what's in the response for debugging
+        if st.session_state.debug_mode:
+            st.write("API Response keys:", list(loads_data.keys()))
 else:
     # Show a simple warning without all the debug details
-    st.warning("⚠️ Unable to connect to the API server")
+    st.warning("Unable to connect to the API server")
     
     # Add a helpful expander with troubleshooting steps
     with st.expander("Troubleshooting Steps"):
@@ -403,7 +381,7 @@ else:
     
     df = pd.DataFrame(mock_data)
     df['status_display'] = df['status'].apply(
-        lambda x: f"🟢 {x.upper()}" if x == 'completed' else f"🔵 {x.upper()}"
+        lambda x: f"COMPLETED" if x == 'completed' else f"RUNNING"
     )
     
     st.dataframe(
@@ -419,20 +397,18 @@ st.divider()
 st.subheader("System Health Status")
 
 with st.spinner("Checking system health..."):
-    health_data = api_get('/system-health')
+    health_data = api_get('/system/health')
 
 if health_data:
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         status = health_data.get('status', 'unknown')
-        color = "🟢" if status == 'operational' else "🟡" if status == 'degraded' else "🔴"
-        st.metric("System Status", f"{color} {status.upper()}")
+        st.metric("System Status", status.upper())
     
     with col2:
         db_status = health_data.get('database_status', 'unknown')
-        color = "🟢" if db_status == 'healthy' else "🔴"
-        st.metric("Database", f"{color} {db_status.upper()}")
+        st.metric("Database", db_status.upper())
     
     with col3:
         errors = health_data.get('recent_errors_24h', 0)
@@ -444,9 +420,9 @@ if health_data:
 else:
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("System Status", "🔴 OFFLINE")
+        st.metric("System Status", "OFFLINE")
     with col2:
-        st.metric("Database", "⚠️ UNKNOWN")
+        st.metric("Database", "UNKNOWN")
     with col3:
         st.metric("Errors (24h)", "N/A")
     with col4:

@@ -13,45 +13,56 @@ st.set_page_config(
     layout="wide"
 )
 
-# Use the SideBarLinks function to control navigation
 SideBarLinks()
 
-# Initialize session state
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = 'http://api:4000/api'
+    st.session_state.api_base_url = 'http://api:4000'
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 
-# API Helper Functions
 def api_get(endpoint):
     try:
-        response = requests.get(f"{st.session_state.api_base_url}{endpoint}")
+        full_url = f"{st.session_state.api_base_url}{endpoint}"
+        response = requests.get(full_url, timeout=10)
         if response.status_code == 200:
             return response.json()
         else:
+            logger.error(f"API Error {response.status_code} for {endpoint}")
             st.error(f"API Error: {response.status_code}")
             return None
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error for {endpoint}")
+        st.error("Cannot connect to server")
+        return None
     except Exception as e:
-        st.error(f"Connection Error: {str(e)}")
+        logger.error(f"Error for {endpoint}: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return None
 
 def api_post(endpoint, data):
     try:
+        full_url = f"{st.session_state.api_base_url}{endpoint}"
         response = requests.post(
-            f"{st.session_state.api_base_url}{endpoint}",
+            full_url,
             json=data,
-            headers={'Content-Type': 'application/json'}
+            headers={'Content-Type': 'application/json'},
+            timeout=10
         )
         if response.status_code in [200, 201]:
             return response.json()
         else:
+            logger.error(f"API Error {response.status_code} for {endpoint}")
             st.error(f"API Error: {response.status_code}")
             return None
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error for {endpoint}")
+        st.error("Cannot connect to server")
+        return None
     except Exception as e:
-        st.error(f"Connection Error: {str(e)}")
+        logger.error(f"Error for {endpoint}: {str(e)}")
+        st.error(f"Error: {str(e)}")
         return None
 
-# Page Header
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
     st.title("System Health Dashboard")
@@ -65,46 +76,43 @@ with col3:
     if st.button("Refresh Now", use_container_width=True):
         st.rerun()
 
-# Auto-refresh logic
 if st.session_state.auto_refresh:
     time.sleep(30)
     st.rerun()
 
 st.divider()
 
-# Fetch system health data - FIXED: removed /admin from endpoint
-health_data = api_get('/system-health')
+health_data = api_get('/system/health')
 
 if health_data:
-    # System Status Overview
     st.subheader("System Status Overview")
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        status = health_data.get('status', 'unknown')
+        status = health_data.get('overall_status', 'unknown')
         if status == 'operational':
-            st.success(f"🟢 OPERATIONAL")
+            st.success("OPERATIONAL")
             st.caption("All systems running normally")
         elif status == 'degraded':
-            st.warning(f"🟡 DEGRADED")
+            st.warning("DEGRADED")
             st.caption("Some issues detected")
         else:
-            st.error(f"🔴 CRITICAL")
+            st.error("CRITICAL")
             st.caption("System issues present")
     
     with col2:
         db_status = health_data.get('database_status', 'unknown')
         if db_status == 'healthy':
-            st.success(f"🟢 DATABASE HEALTHY")
+            st.success("DATABASE HEALTHY")
         else:
-            st.error(f"🔴 DATABASE ISSUES")
+            st.error("DATABASE ISSUES")
         st.caption("Database connectivity")
     
     with col3:
         errors_24h = health_data.get('recent_errors_24h', 0)
         if errors_24h == 0:
-            st.success(f"0 ERRORS")
+            st.success("0 ERRORS")
         elif errors_24h < 10:
             st.warning(f"{errors_24h} ERRORS")
         else:
@@ -119,13 +127,11 @@ if health_data:
             st.info(f"{active_loads} ACTIVE LOADS")
         st.caption("Currently running")
     
-    # Last update timestamp
-    if health_data.get('timestamp'):
-        st.caption(f"Last updated: {health_data['timestamp']}")
+    if health_data.get('health_check_timestamp'):
+        st.caption(f"Last updated: {health_data['health_check_timestamp']}")
     
     st.divider()
     
-    # System Metrics
     st.subheader("System Metrics")
     
     metrics = health_data.get('system_metrics', {})
@@ -141,24 +147,22 @@ if health_data:
         with col4:
             st.metric("Total Users", metrics.get('total_users', 0))
     
-    # Last Successful Load
     last_load = health_data.get('last_successful_load')
     if last_load:
-        st.success(f"✅ Last successful load: **{last_load.get('load_type', 'Unknown')}** (ID: {last_load.get('load_id', 'N/A')})")
+        st.success(f"Last successful load: **{last_load.get('load_type', 'Unknown')}** (ID: {last_load.get('load_id', 'N/A')})")
         st.caption(f"Completed at: {last_load.get('completed_at', 'Unknown')}")
     
 else:
     st.warning("Unable to connect to system health API. Showing mock data for demonstration.")
     
-    # Mock data fallback
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.success("🟢 OPERATIONAL")
+        st.success("OPERATIONAL")
         st.caption("All systems running normally")
     
     with col2:
-        st.success("🟢 DATABASE HEALTHY")
+        st.success("DATABASE HEALTHY")
         st.caption("Database connectivity")
     
     with col3:
@@ -171,10 +175,8 @@ else:
 
 st.divider()
 
-# Error Logs Section
 st.subheader("Recent Error Logs")
 
-# Filter controls for error logs
 col1, col2, col3 = st.columns([2, 1, 1])
 with col1:
     severity_filter = st.selectbox("Severity", ["All", "critical", "error", "warning", "info"])
@@ -183,47 +185,42 @@ with col2:
 with col3:
     resolved_filter = st.selectbox("Status", ["All", "Resolved", "Unresolved"])
 
-# Fetch error logs - FIXED: removed /admin from endpoint
-params = {}
+params = []
+endpoint = f"/system/error-logs?days={days_back}"
 if severity_filter != "All":
-    params['severity'] = severity_filter
-if days_back:
-    params['days'] = days_back
+    endpoint += f"&severity={severity_filter}"
 if resolved_filter == "Resolved":
-    params['resolved'] = 'true'
+    endpoint += "&resolved=true"
 elif resolved_filter == "Unresolved":
-    params['resolved'] = 'false'
-
-query_params = "&".join([f"{k}={v}" for k, v in params.items()])
-endpoint = f"/error-logs?{query_params}" if query_params else "/error-logs"
+    endpoint += "&resolved=false"
 
 error_data = api_get(endpoint)
 
 if error_data:
-    errors = error_data.get('errors', [])
+    errors = error_data.get('error_logs', [])
     
     if errors:
         df_errors = pd.DataFrame(errors)
         
-        # Add severity indicators
         df_errors['severity_display'] = df_errors['severity'].apply(
-            lambda x: f"🔴 {x.upper()}" if x == 'critical'
-            else f"🟠 {x.upper()}" if x == 'error'  
-            else f"🟡 {x.upper()}" if x == 'warning'
-            else f"🔵 {x.upper()}"
+            lambda x: f"CRITICAL" if x == 'critical'
+            else f"ERROR" if x == 'error'  
+            else f"WARNING" if x == 'warning'
+            else f"INFO"
         )
         
-        # Add resolution status
         df_errors['status'] = df_errors['resolved_at'].apply(
-            lambda x: "✅ Resolved" if pd.notna(x) else "⚠️ Pending"
+            lambda x: "RESOLVED" if pd.notna(x) else "PENDING"
         )
         
-        # Display error logs table
+        if 'created_at' in df_errors.columns:
+            df_errors['created_at'] = pd.to_datetime(df_errors['created_at']).dt.strftime('%Y-%m-%d %H:%M')
+        
         st.dataframe(
             df_errors[['error_id', 'error_type', 'severity_display', 'module', 
                       'error_message', 'created_at', 'status']],
             column_config={
-                "error_id": "ID",
+                "error_id": st.column_config.NumberColumn("ID", width="small"),
                 "error_type": "Type",
                 "severity_display": "Severity", 
                 "module": "Module",
@@ -235,7 +232,6 @@ if error_data:
             hide_index=True
         )
         
-        # Error summary
         st.divider()
         col1, col2, col3, col4 = st.columns(4)
         
@@ -260,10 +256,9 @@ if error_data:
                 resolution_rate = (resolved / len(df_errors)) * 100
                 st.metric("Resolution Rate", f"{resolution_rate:.1f}%")
     else:
-        st.success("✅ No errors found in the specified time period!")
+        st.success("No errors found in the specified time period.")
 
 else:
-    # Mock error data
     st.warning("Unable to fetch error logs. Showing sample data.")
     
     mock_errors = [
@@ -289,10 +284,10 @@ else:
     
     df_mock = pd.DataFrame(mock_errors)
     df_mock['severity_display'] = df_mock['severity'].apply(
-        lambda x: f"🟡 {x.upper()}" if x == 'warning' else f"🟠 {x.upper()}"
+        lambda x: f"WARNING" if x == 'warning' else f"ERROR"
     )
     df_mock['status'] = df_mock['resolved_at'].apply(
-        lambda x: "✅ Resolved" if pd.notna(x) else "⚠️ Pending"
+        lambda x: "RESOLVED" if pd.notna(x) else "PENDING"
     )
     
     st.dataframe(
@@ -304,7 +299,6 @@ else:
 
 st.divider()
 
-# Data Validation Section
 st.subheader("Data Validation")
 
 col1, col2 = st.columns(2)
@@ -317,27 +311,26 @@ with col1:
     
     if st.button("Run Validation", type="primary"):
         with st.spinner("Running validation check..."):
-            # FIXED: removed /admin from endpoint
-            result = api_post('/data-validation', {
+            result = api_post('/system/data-validation', {
                 'validation_type': validation_type,
                 'table_name': table_name,
                 'run_by': 'Mike Lewis'
             })
             
             if result:
-                status = result.get('status', 'unknown')
-                total_records = result.get('total_records', 0)
-                valid_records = result.get('valid_records', 0)
-                invalid_records = result.get('invalid_records', 0)
+                results = result.get('results', {})
+                status = results.get('status', 'unknown')
+                total_records = results.get('total_records', 0)
+                valid_records = results.get('valid_records', 0)
+                invalid_records = results.get('invalid_records', 0)
+                validity_percentage = results.get('validity_percentage', 0)
                 
-                if status == 'no_data':
-                    st.info(f"ℹ️ No data found in {table_name} table. Nothing to validate.")
-                elif status == 'passed':
-                    st.success(f"✅ Validation passed! {valid_records}/{total_records} records are valid")
+                if status == 'passed':
+                    st.success(f"Validation passed! {valid_records}/{total_records} records are valid ({validity_percentage}%)")
                 elif status == 'warning':
-                    st.warning(f"⚠️ Validation passed with warnings. {invalid_records} issues found in {total_records} records")
+                    st.warning(f"Validation passed with warnings. {invalid_records} issues found in {total_records} records")
                 elif status == 'failed':
-                    st.error(f"❌ Validation failed. {invalid_records} issues found in {total_records} records")
+                    st.error(f"Validation failed. {invalid_records} issues found in {total_records} records")
                 else:
                     st.info(f"Validation completed with status: {status}")
             else:
@@ -345,20 +338,22 @@ with col1:
 
 with col2:
     st.write("**Recent Validation Results**")
-    # FIXED: removed /admin from endpoint
-    validation_data = api_get('/data-validation?days=7')
+    validation_data = api_get('/system/data-validation?days=7')
     
     if validation_data:
-        reports = validation_data.get('reports', [])
+        reports = validation_data.get('validation_reports', [])
         if reports:
-            for report in reports[-3:]:  # Show last 3 reports
+            for report in reports[-3:]:
                 status = report.get('status', 'unknown')
+                table_name = report.get('table_name', 'Unknown')
+                validation_type = report.get('validation_type', 'Unknown')
+                
                 if status == 'passed':
-                    st.success(f"✅ {report.get('table_name')} - {report.get('validation_type')}")
+                    st.success(f"{table_name} - {validation_type}")
                 elif status == 'warning':
-                    st.warning(f"⚠️ {report.get('table_name')} - {report.get('validation_type')}")
+                    st.warning(f"{table_name} - {validation_type}")
                 else:
-                    st.error(f"❌ {report.get('table_name')} - {report.get('validation_type')}")
+                    st.error(f"{table_name} - {validation_type}")
                 st.caption(f"Run on {report.get('run_date', 'Unknown')}")
         else:
             st.info("No recent validation reports")
@@ -367,10 +362,8 @@ with col2:
 
 st.divider()
 
-# System Recommendations
 st.subheader("System Recommendations")
 
-# This would normally come from the health API, but we'll provide static recommendations
 recommendations = []
 
 if health_data:
@@ -379,32 +372,32 @@ if health_data:
     db_status = health_data.get('database_status', 'unknown')
     
     if error_count > 10:
-        recommendations.append("🔴 High error rate detected. Review error logs for patterns.")
+        recommendations.append(("error", "High error rate detected. Review error logs for patterns."))
     elif error_count > 5:
-        recommendations.append("🟡 Moderate error activity. Monitor for trends.")
+        recommendations.append(("warning", "Moderate error activity. Monitor for trends."))
     else:
-        recommendations.append("✅ Error rate within normal parameters")
+        recommendations.append(("success", "Error rate within normal parameters"))
     
     if active_loads > 3:
-        recommendations.append("🟡 Multiple concurrent loads detected. Monitor system resources.")
+        recommendations.append(("warning", "Multiple concurrent loads detected. Monitor system resources."))
     else:
-        recommendations.append("✅ Data load capacity normal")
+        recommendations.append(("success", "Data load capacity normal"))
     
     if db_status == 'healthy':
-        recommendations.append("✅ Database connection stable")
+        recommendations.append(("success", "Database connection stable"))
     else:
-        recommendations.append("🔴 Database issues detected. Check connection settings.")
+        recommendations.append(("error", "Database issues detected. Check connection settings."))
 else:
     recommendations = [
-        "🔴 Unable to connect to system health API",
-        "🟡 Check API connectivity and backend services",
-        "✅ Page functionality working with mock data"
+        ("error", "Unable to connect to system health API"),
+        ("warning", "Check API connectivity and backend services"),
+        ("success", "Page functionality working with mock data")
     ]
 
-for rec in recommendations:
-    if rec.startswith("🔴"):
-        st.error(rec)
-    elif rec.startswith("🟡"):
-        st.warning(rec)
+for rec_type, message in recommendations:
+    if rec_type == "error":
+        st.error(message)
+    elif rec_type == "warning":
+        st.warning(message)
     else:
-        st.success(rec)
+        st.success(message)

@@ -48,13 +48,15 @@ with tab1:
         days_filter = st.number_input("Days to look back", min_value=1, max_value=90, value=7, key="data_days")
     
     if st.button("Load Data Errors", key="load_data_errors"):
-        params = f"?days={days_filter}" #build query params
+        params = f"?days={days_filter}"
         if error_type_filter != "All":
             params += f"&error_type={error_type_filter}"
         if table_filter:
             params += f"&table_name={table_filter}"
         
-        data = make_request(f"/api/data-errors{params}")
+        endpoint = f"/system/data-errors{params}"
+        
+        data = make_request(endpoint)
         
         if data and 'errors' in data:
             st.session_state['data_errors'] = data['errors']
@@ -90,7 +92,7 @@ with tab2:
         st.subheader("Current Cleanup Schedule")
         
         if st.button("Load Cleanup Schedule", key="load_cleanup"):
-            data = make_request("/api/data-cleanup")
+            data = make_request("/system/data-cleanup")
             
             if data:
                 st.session_state['active_schedules'] = data.get('active_schedules', [])
@@ -121,7 +123,7 @@ with tab2:
             
             if history:
                 st.write("**Recent Cleanup History:**")
-                for item in history[:5]:  #show last 5 runs
+                for item in history[:5]:
                     status_text = "COMPLETED" if item['status'] == 'completed' else "FAILED"
                     st.write(f"[{status_text}] {item['cleanup_type']} - {item['started_at']} - {item.get('records_deleted', 0)} records deleted")
     
@@ -138,7 +140,6 @@ with tab2:
             
             if st.form_submit_button("Schedule Cleanup"):
                 if cleanup_type and frequency and retention_days and created_by:
-                    #convert date to datetime (start of day)
                     next_run_datetime = datetime.combine(next_run_date, datetime.min.time())
                     
                     cleanup_data = {
@@ -149,7 +150,7 @@ with tab2:
                         "created_by": created_by
                     }
                     
-                    result = make_request("/api/data-cleanup", method='POST', data=cleanup_data)
+                    result = make_request("/system/data-cleanup", method='POST', data=cleanup_data)
                     
                     if result:
                         st.success(f"Cleanup scheduled successfully! Schedule ID: {result.get('schedule_id')}")

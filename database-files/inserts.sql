@@ -155,7 +155,7 @@ INSERT INTO ErrorLogs (error_type, severity, module, error_message, user_id) VAL
 ('MemoryLimit', 'warning', 'CacheLayer', 'Cache memory limit exceeded', NULL);
 
 
-INSERT INTO DataErrors (error_type, table_name, record_id, field_name, invalid_value, expected_format) VALUES
-('invalid', 'PlayerGameStats', '123', 'shooting_percentage', '1.25', 'Decimal between 0 and 1'),
-('duplicate', 'Game', '456', 'game_id', '456', 'Unique identifier'),
-('missing', 'Players', '789', 'position', NULL, 'Required enum value');
+INSERT INTO DataErrors (error_type, table_name, record_id, field_name, invalid_value, expected_format, detected_at) VALUES
+('invalid', 'PlayerGameStats', '123', 'shooting_percentage', '1.25', 'Decimal between 0 and 1', '2025-08-03 14:30:00'),
+('duplicate', 'Game', '456', 'game_id', '456', 'Unique identifier', '2025-08-13 09:15:00'),
+('missing', 'Players', '789', 'position', NULL, 'Required enum value', '2025-08-08 16:45:00');
