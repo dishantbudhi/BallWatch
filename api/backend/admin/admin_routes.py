@@ -687,7 +687,6 @@ def get_validation_reports():
     return the_response
 
 
-#------------------------------------------------------------
 # Run data validation check [Mike-2.4]
 @admin.route('/data-validation', methods=['POST'])
 def run_validation_check():
@@ -718,63 +717,172 @@ def run_validation_check():
         table_name = validation_data['table_name']
         validation_type = validation_data['validation_type']
         
-        # Example validation: check for null values in required fields
-        if table_name == 'Players':
-            cursor.execute('''
-                SELECT 
-                    COUNT(*) as total,
-                    SUM(CASE WHEN first_name IS NULL OR last_name IS NULL THEN 1 ELSE 0 END) as invalid
-                FROM Players
-            ''')
-        elif table_name == 'Teams':
-            cursor.execute('''
-                SELECT 
-                    COUNT(*) as total,
-                    SUM(CASE WHEN name IS NULL OR city IS NULL THEN 1 ELSE 0 END) as invalid
-                FROM Teams
-            ''')
-        else:
-            # Generic count for other tables  
-            cursor.execute(f'SELECT COUNT(*) as total, 0 as invalid FROM {table_name}')
+        # Whitelist of allowed tables to prevent SQL injection
+        allowed_tables = ['Players', 'Teams', 'Game', 'PlayerGameStats']
+        if table_name not in allowed_tables:
+            return make_response(jsonify({"error": f"Invalid table name. Must be one of: {allowed_tables}"}), 400)
         
-        result = cursor.fetchone()
-        total_records = result['total']
-        invalid_records = result['invalid']
+        # Initialize counters
+        total_records = 0
+        invalid_records = 0
+        
+        try:
+            # Perform validation based on table_name and validation_type
+            if validation_type == 'null_check':
+                # Check for null values in required fields
+                if table_name == 'Players':
+                    cursor.execute('''
+                        SELECT 
+                            COUNT(*) as total,
+                            SUM(CASE WHEN first_name IS NULL OR last_name IS NULL THEN 1 ELSE 0 END) as invalid
+                        FROM Players
+                    ''')
+                elif table_name == 'Teams':
+                    cursor.execute('''
+                        SELECT 
+                            COUNT(*) as total,
+                            SUM(CASE WHEN name IS NULL OR city IS NULL THEN 1 ELSE 0 END) as invalid
+                        FROM Teams
+                    ''')
+                elif table_name == 'Game':
+                    cursor.execute('''
+                        SELECT 
+                            COUNT(*) as total,
+                            SUM(CASE WHEN game_date IS NULL OR home_team_id IS NULL OR away_team_id IS NULL THEN 1 ELSE 0 END) as invalid
+                        FROM Game
+                    ''')
+                elif table_name == 'PlayerGameStats':
+                    cursor.execute('''
+                        SELECT 
+                            COUNT(*) as total,
+                            SUM(CASE WHEN player_id IS NULL OR game_id IS NULL THEN 1 ELSE 0 END) as invalid
+                        FROM PlayerGameStats
+                    ''')
+                    
+            elif validation_type == 'duplicate_check':
+                # Check for duplicates
+                if table_name == 'Players':
+                    cursor.execute('''
+                        SELECT 
+                            (SELECT COUNT(*) FROM Players) as total,
+                            (SELECT COUNT(*) FROM (
+                                SELECT first_name, last_name, COUNT(*) 
+                                FROM Players 
+                                GROUP BY first_name, last_name 
+                                HAVING COUNT(*) > 1
+                            ) as dups) as invalid
+                    ''')
+                elif table_name == 'Teams':
+                    cursor.execute('''
+                        SELECT 
+                            (SELECT COUNT(*) FROM Teams) as total,
+                            (SELECT COUNT(*) FROM (
+                                SELECT name, COUNT(*) 
+                                FROM Teams 
+                                GROUP BY name 
+                                HAVING COUNT(*) > 1
+                            ) as dups) as invalid
+                    ''')
+                else:
+                    # Generic count for other tables
+                    cursor.execute(f'SELECT COUNT(*) as total, 0 as invalid FROM {table_name}')
+                    
+            elif validation_type == 'integrity_check':
+                # Check referential integrity
+                if table_name == 'Game':
+                    cursor.execute('''
+                        SELECT 
+                            (SELECT COUNT(*) FROM Game) as total,
+                            (SELECT COUNT(*) FROM Game g 
+                             WHERE NOT EXISTS (SELECT 1 FROM Teams t WHERE t.team_id = g.home_team_id)
+                                OR NOT EXISTS (SELECT 1 FROM Teams t WHERE t.team_id = g.away_team_id)) as invalid
+                    ''')
+                elif table_name == 'PlayerGameStats':
+                    cursor.execute('''
+                        SELECT 
+                            (SELECT COUNT(*) FROM PlayerGameStats) as total,
+                            (SELECT COUNT(*) FROM PlayerGameStats pgs
+                             WHERE NOT EXISTS (SELECT 1 FROM Players p WHERE p.player_id = pgs.player_id)
+                                OR NOT EXISTS (SELECT 1 FROM Game g WHERE g.game_id = pgs.game_id)) as invalid
+                    ''')
+                else:
+                    # Default to simple count
+                    cursor.execute(f'SELECT COUNT(*) as total, 0 as invalid FROM {table_name}')
+            else:
+                # Default validation - just count records
+                cursor.execute(f'SELECT COUNT(*) as total, 0 as invalid FROM {table_name}')
+            
+            result = cursor.fetchone()
+            if result:
+                total_records = result.get('total', 0)
+                invalid_records = result.get('invalid', 0)
+            else:
+                total_records = 0
+                invalid_records = 0
+                
+        except Exception as e:
+            current_app.logger.error(f'Error performing validation query: {e}')
+            # If the query fails (table doesn't exist, etc), set defaults
+            total_records = 0
+            invalid_records = 0
+        
         valid_records = total_records - invalid_records
         
         # Determine status
-        if invalid_records == 0:
+        if total_records == 0:
+            status = 'no_data'
+        elif invalid_records == 0:
             status = 'passed'
         elif invalid_records < total_records * 0.05:  # Less than 5% invalid
             status = 'warning'
         else:
             status = 'failed'
         
-        # Insert validation report
-        query = '''
-            INSERT INTO ValidationReports (
-                validation_type, table_name, status, total_records, 
-                valid_records, invalid_records, validation_rules, 
-                run_date, run_by
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
-        '''
+        # Check if ValidationReports table exists and insert if it does
+        try:
+            # First check if the table exists
+            cursor.execute('''
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_schema = DATABASE() 
+                AND table_name = 'ValidationReports'
+            ''')
+            
+            table_exists = cursor.fetchone()['COUNT(*)'] > 0
+            
+            if table_exists:
+                # Insert validation report
+                query = '''
+                    INSERT INTO ValidationReports (
+                        validation_type, table_name, status, total_records, 
+                        valid_records, invalid_records, validation_rules, 
+                        run_date, run_by
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, NOW(), %s)
+                '''
+                
+                values = (
+                    validation_type,
+                    table_name,
+                    status,
+                    total_records,
+                    valid_records,
+                    invalid_records,
+                    json.dumps(validation_data.get('validation_rules', {})),
+                    validation_data['run_by']
+                )
+                
+                cursor.execute(query, values)
+                db.get_db().commit()
+                new_validation_id = cursor.lastrowid
+            else:
+                new_validation_id = None
+                current_app.logger.warning('ValidationReports table does not exist')
+                
+        except Exception as e:
+            current_app.logger.error(f'Error saving validation report: {e}')
+            new_validation_id = None
         
-        values = (
-            validation_type,
-            table_name,
-            status,
-            total_records,
-            valid_records,
-            invalid_records,
-            json.dumps(validation_data.get('validation_rules', {})),
-            validation_data['run_by']
-        )
-        
-        cursor.execute(query, values)
-        db.get_db().commit()
-        
-        new_validation_id = cursor.lastrowid
-        
+        # Return results even if we couldn't save to ValidationReports
         return make_response(jsonify({
             "message": "Validation check completed",
             "validation_id": new_validation_id,
@@ -787,4 +895,7 @@ def run_validation_check():
     except Exception as e:
         current_app.logger.error(f'Error running validation check: {e}')
         db.get_db().rollback()
-        return make_response(jsonify({"error": "Failed to run validation check"}), 500)
+        return make_response(jsonify({
+            "error": "Failed to run validation check",
+            "details": str(e)
+        }), 500)

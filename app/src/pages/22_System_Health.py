@@ -326,12 +326,20 @@ with col1:
             
             if result:
                 status = result.get('status', 'unknown')
-                if status == 'passed':
-                    st.success(f"✅ Validation passed! {result.get('valid_records', 0)} records validated")
+                total_records = result.get('total_records', 0)
+                valid_records = result.get('valid_records', 0)
+                invalid_records = result.get('invalid_records', 0)
+                
+                if status == 'no_data':
+                    st.info(f"ℹ️ No data found in {table_name} table. Nothing to validate.")
+                elif status == 'passed':
+                    st.success(f"✅ Validation passed! {valid_records}/{total_records} records are valid")
                 elif status == 'warning':
-                    st.warning(f"⚠️ Validation passed with warnings. {result.get('invalid_records', 0)} issues found")
+                    st.warning(f"⚠️ Validation passed with warnings. {invalid_records} issues found in {total_records} records")
+                elif status == 'failed':
+                    st.error(f"❌ Validation failed. {invalid_records} issues found in {total_records} records")
                 else:
-                    st.error(f"❌ Validation failed. {result.get('invalid_records', 0)} issues found")
+                    st.info(f"Validation completed with status: {status}")
             else:
                 st.error("Failed to run validation")
 
