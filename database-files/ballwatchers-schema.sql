@@ -1,39 +1,30 @@
 CREATE SCHEMA IF NOT EXISTS BallWatch;
 USE BallWatch;
 
--- Drop tables in correct order (respecting foreign key constraints)
-DROP TABLE IF EXISTS ValidationReports;
-DROP TABLE IF EXISTS CleanupHistory;
-DROP TABLE IF EXISTS CleanupSchedule;
-DROP TABLE IF EXISTS DataErrors;
-DROP TABLE IF EXISTS ErrorLogs;
-DROP TABLE IF EXISTS DataLoads;
-DROP TABLE IF EXISTS SystemHealth;
-DROP TABLE IF EXISTS GamePlans;
-DROP TABLE IF EXISTS KeyMatchups;
-DROP TABLE IF EXISTS GamePlayers;
-DROP TABLE IF EXISTS PlayerGameStats;
 DROP TABLE IF EXISTS PlayerMatchup;
-DROP TABLE IF EXISTS Game;
+DROP TABLE IF EXISTS PlayerGameStats;
+DROP TABLE IF EXISTS PlayerLineups;
 DROP TABLE IF EXISTS TeamsPlayers;
 DROP TABLE IF EXISTS DraftEvaluations;
-DROP TABLE IF EXISTS PlayerLineups;
-DROP TABLE IF EXISTS Teams;
-DROP TABLE IF EXISTS Players;
+DROP TABLE IF EXISTS GamePlans;
+DROP TABLE IF EXISTS SystemLogs;
+DROP TABLE IF EXISTS Game;
 DROP TABLE IF EXISTS LineupConfiguration;
+DROP TABLE IF EXISTS Players;
+DROP TABLE IF EXISTS Teams;
 DROP TABLE IF EXISTS Agent;
 DROP TABLE IF EXISTS Users;
 
-CREATE TABLE IF NOT EXISTS Users (
+CREATE TABLE Users (
    user_id INT PRIMARY KEY AUTO_INCREMENT,
    email VARCHAR(100) UNIQUE NOT NULL,
    username VARCHAR(50) UNIQUE NOT NULL,
-   role ENUM('admin', 'coach', 'gm', 'analyst', 'fan') NOT NULL,
+   role VARCHAR(20) NOT NULL,
    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
    is_active BOOLEAN DEFAULT TRUE
 );
 
-CREATE TABLE IF NOT EXISTS Agent (
+CREATE TABLE Agent (
    agent_id INT PRIMARY KEY AUTO_INCREMENT,
    first_name VARCHAR(50) NOT NULL,
    last_name VARCHAR(50) NOT NULL,
@@ -42,63 +33,57 @@ CREATE TABLE IF NOT EXISTS Agent (
    email VARCHAR(100) UNIQUE
 );
 
-CREATE TABLE IF NOT EXISTS Players (
-   player_id INT PRIMARY KEY AUTO_INCREMENT,
-   first_name VARCHAR(50) NOT NULL,
-   last_name VARCHAR(50) NOT NULL,
-   age INT CHECK (age > 0),
-   college VARCHAR(100),
-   position ENUM('Guard', 'Forward', 'Center', 'PG', 'SG', 'SF', 'PF', 'C'),
-   weight INT CHECK (weight > 0),
-   player_status ENUM('Active', 'Injured', 'Retired', 'G-League') DEFAULT 'Active',
-   agent_id INT,
-   height VARCHAR(10),
-   picture TEXT,
-   DOB DATE,
-   years_exp INT DEFAULT 0,
-   dominant_hand ENUM('Left', 'Right') DEFAULT 'Right',
-   expected_salary DECIMAL(12,2),
-   player_type VARCHAR(50),
-   current_salary DECIMAL(12,2),
-   draft_year INT,
-   CONSTRAINT FK_Players_Agent FOREIGN KEY (agent_id) REFERENCES Agent(agent_id)
-       ON UPDATE CASCADE ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS Teams (
+CREATE TABLE Teams (
    team_id INT PRIMARY KEY AUTO_INCREMENT,
    name VARCHAR(100) NOT NULL,
    city VARCHAR(50),
-   state VARCHAR(50),
-   arena VARCHAR(100),
-   conference ENUM('Eastern', 'Western') NOT NULL,
+   conference VARCHAR(10) NOT NULL,
    division VARCHAR(50) NOT NULL,
    coach VARCHAR(100),
-   gm VARCHAR(100),
-   owner VARCHAR(100),
-   championships INT DEFAULT 0,
+   arena VARCHAR(100),
    founded_year INT,
+   championships INT DEFAULT 0,
    offensive_system VARCHAR(100),
    defensive_system VARCHAR(100)
 );
 
-CREATE TABLE IF NOT EXISTS TeamsPlayers (
+CREATE TABLE Players (
+   player_id INT PRIMARY KEY AUTO_INCREMENT,
+   first_name VARCHAR(50) NOT NULL,
+   last_name VARCHAR(50) NOT NULL,
+   age INT,
+   height VARCHAR(10),
+   weight INT,
+   college VARCHAR(100),
+   position VARCHAR(20),
+   years_exp INT DEFAULT 0,
+   draft_year INT,
+   player_status VARCHAR(20) DEFAULT 'Active',
+   dominant_hand VARCHAR(10) DEFAULT 'Right',
+   expected_salary DECIMAL(12,2),
+   current_salary DECIMAL(12,2),
+   agent_id INT,
+   picture TEXT,
+   DOB DATE,
+   CONSTRAINT FK_Players_Agent FOREIGN KEY (agent_id) REFERENCES Agent(agent_id)
+       ON UPDATE CASCADE ON DELETE SET NULL
+);
+
+CREATE TABLE TeamsPlayers (
    player_id INT,
    team_id INT,
    joined_date DATE,
-   jersey_num INT CHECK (jersey_num BETWEEN 0 AND 99),
+   jersey_num INT,
    left_date DATE,
-   status VARCHAR(50) DEFAULT 'active',
+   status VARCHAR(20) DEFAULT 'active',
    PRIMARY KEY (player_id, team_id, joined_date),
    CONSTRAINT FK_TeamsPlayers_Players FOREIGN KEY (player_id)
        REFERENCES Players(player_id) ON UPDATE CASCADE ON DELETE CASCADE,
    CONSTRAINT FK_TeamsPlayers_Teams FOREIGN KEY (team_id)
-       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE,
-   CONSTRAINT CHK_Dates CHECK (left_date IS NULL OR left_date >= joined_date)
+       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
--- Fixed Game table with all required columns
-CREATE TABLE IF NOT EXISTS Game (
+CREATE TABLE Game (
    game_id INT PRIMARY KEY AUTO_INCREMENT,
    game_date DATE NOT NULL,
    game_time TIME,
@@ -107,8 +92,8 @@ CREATE TABLE IF NOT EXISTS Game (
    home_score INT DEFAULT 0,
    away_score INT DEFAULT 0,
    season VARCHAR(20) NOT NULL,
-   game_type ENUM('regular', 'playoff') DEFAULT 'regular',
-   status ENUM('scheduled', 'in_progress', 'completed') DEFAULT 'scheduled',
+   game_type VARCHAR(20) DEFAULT 'regular',
+   status VARCHAR(20) DEFAULT 'scheduled',
    attendance INT,
    venue VARCHAR(100),
    CONSTRAINT FK_Game_HomeTeam FOREIGN KEY (home_team_id)
@@ -117,8 +102,7 @@ CREATE TABLE IF NOT EXISTS Game (
        REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
--- Fixed PlayerGameStats with all required columns
-CREATE TABLE IF NOT EXISTS PlayerGameStats (
+CREATE TABLE PlayerGameStats (
    player_id INT NOT NULL,
    game_id INT NOT NULL,
    points INT DEFAULT 0,
@@ -139,7 +123,7 @@ CREATE TABLE IF NOT EXISTS PlayerGameStats (
        REFERENCES Game(game_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS PlayerMatchup (
+CREATE TABLE PlayerMatchup (
    game_id INT,
    offensive_player_id INT,
    defensive_player_id INT,
@@ -157,10 +141,10 @@ CREATE TABLE IF NOT EXISTS PlayerMatchup (
        REFERENCES Players(player_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS LineupConfiguration (
+CREATE TABLE LineupConfiguration (
    lineup_id INT PRIMARY KEY AUTO_INCREMENT,
    team_id INT NOT NULL,
-   quarter INT CHECK (quarter BETWEEN 1 AND 4),
+   quarter INT,
    time_on TIME,
    time_off TIME,
    plus_minus INT,
@@ -170,7 +154,7 @@ CREATE TABLE IF NOT EXISTS LineupConfiguration (
        REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS PlayerLineups (
+CREATE TABLE PlayerLineups (
    player_id INT,
    lineup_id INT,
    position_in_lineup VARCHAR(50),
@@ -181,16 +165,15 @@ CREATE TABLE IF NOT EXISTS PlayerLineups (
        REFERENCES LineupConfiguration(lineup_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
--- Fixed table name: DraftEvaluations (not DraftEval)
-CREATE TABLE IF NOT EXISTS DraftEvaluations (
+CREATE TABLE DraftEvaluations (
    evaluation_id INT PRIMARY KEY AUTO_INCREMENT,
    player_id INT NOT NULL,
-   overall_rating DECIMAL(5,2) CHECK (overall_rating BETWEEN 0 AND 100),
+   overall_rating DECIMAL(5,2),
    offensive_rating DECIMAL(5,2),
    defensive_rating DECIMAL(5,2),
    athleticism_rating DECIMAL(5,2),
    potential_rating DECIMAL(5,2),
-   evaluation_type ENUM('prospect', 'free_agent', 'trade_target') DEFAULT 'prospect',
+   evaluation_type VARCHAR(20) DEFAULT 'prospect',
    strengths TEXT,
    weaknesses TEXT,
    scout_notes TEXT,
@@ -202,13 +185,7 @@ CREATE TABLE IF NOT EXISTS DraftEvaluations (
        REFERENCES Players(player_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS KeyMatchups (
-   matchup_id INT PRIMARY KEY AUTO_INCREMENT,
-   matchup_text TEXT NOT NULL
-);
-
--- Fixed table name: GamePlans (not GamePlan)
-CREATE TABLE IF NOT EXISTS GamePlans (
+CREATE TABLE GamePlans (
    plan_id INT PRIMARY KEY AUTO_INCREMENT,
    team_id INT NOT NULL,
    opponent_id INT,
@@ -218,7 +195,7 @@ CREATE TABLE IF NOT EXISTS GamePlans (
    defensive_strategy TEXT,
    key_matchups TEXT,
    special_instructions TEXT,
-   status ENUM('draft', 'active', 'archived') DEFAULT 'draft',
+   status VARCHAR(20) DEFAULT 'draft',
    created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
    updated_date DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
    CONSTRAINT FK_GamePlans_Team FOREIGN KEY (team_id)
@@ -229,93 +206,22 @@ CREATE TABLE IF NOT EXISTS GamePlans (
        REFERENCES Game(game_id) ON UPDATE CASCADE ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS SystemHealth (
-   health_id INT PRIMARY KEY AUTO_INCREMENT,
-   check_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-   service_name VARCHAR(100) NOT NULL,
+CREATE TABLE SystemLogs (
+   log_id INT PRIMARY KEY AUTO_INCREMENT,
+   log_type VARCHAR(50) NOT NULL,
+   service_name VARCHAR(100),
+   severity VARCHAR(20) NOT NULL,
+   message TEXT,
    error_rate_pct DECIMAL(5,2),
-   avg_response_time DECIMAL(10,2),
-   status ENUM('Healthy', 'Warning', 'Error', 'Critical') DEFAULT 'Healthy'
-);
-
-CREATE TABLE IF NOT EXISTS ErrorLogs (
-   error_id INT PRIMARY KEY AUTO_INCREMENT,
-   error_type VARCHAR(100),
-   severity ENUM('info', 'warning', 'error', 'critical') NOT NULL,
-   module VARCHAR(100),
-   error_message TEXT,
-   stack_trace TEXT,
+   response_time DECIMAL(10,2),
+   records_processed INT,
+   records_failed INT,
+   source_file VARCHAR(255),
    user_id INT,
    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
    resolved_at DATETIME,
    resolved_by VARCHAR(100),
    resolution_notes TEXT,
-   CONSTRAINT FK_ErrorLogs_Users FOREIGN KEY (user_id)
+   CONSTRAINT FK_SystemLogs_Users FOREIGN KEY (user_id)
        REFERENCES Users(user_id) ON UPDATE CASCADE ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS DataLoads (
-   load_id INT PRIMARY KEY AUTO_INCREMENT,
-   load_type VARCHAR(100),
-   status ENUM('pending', 'running', 'completed', 'failed') DEFAULT 'pending',
-   started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-   completed_at DATETIME,
-   records_processed INT DEFAULT 0,
-   records_failed INT DEFAULT 0,
-   error_message TEXT,
-   initiated_by VARCHAR(100),
-   source_file VARCHAR(255)
-);
-
-CREATE TABLE IF NOT EXISTS DataErrors (
-   data_error_id INT PRIMARY KEY AUTO_INCREMENT,
-   error_type ENUM('duplicate', 'missing', 'invalid') NOT NULL,
-   table_name VARCHAR(100) NOT NULL,
-   record_id VARCHAR(100),
-   field_name VARCHAR(100),
-   invalid_value TEXT,
-   expected_format VARCHAR(255),
-   detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-   resolved_at DATETIME,
-   auto_fixed BOOLEAN DEFAULT FALSE
-);
-
--- Missing tables needed by admin routes
-CREATE TABLE IF NOT EXISTS CleanupSchedule (
-   schedule_id INT PRIMARY KEY AUTO_INCREMENT,
-   cleanup_type VARCHAR(100) NOT NULL,
-   frequency ENUM('daily', 'weekly', 'monthly') NOT NULL,
-   next_run DATETIME,
-   last_run DATETIME,
-   retention_days INT NOT NULL,
-   is_active BOOLEAN DEFAULT TRUE,
-   created_by VARCHAR(100),
-   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS CleanupHistory (
-   history_id INT PRIMARY KEY AUTO_INCREMENT,
-   schedule_id INT,
-   cleanup_type VARCHAR(100),
-   started_at DATETIME,
-   completed_at DATETIME,
-   records_deleted INT,
-   status ENUM('started', 'completed', 'failed') DEFAULT 'started',
-   error_message TEXT,
-   CONSTRAINT FK_CleanupHistory_Schedule FOREIGN KEY (schedule_id)
-       REFERENCES CleanupSchedule(schedule_id) ON UPDATE CASCADE ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS ValidationReports (
-   validation_id INT PRIMARY KEY AUTO_INCREMENT,
-   validation_type VARCHAR(100) NOT NULL,
-   table_name VARCHAR(100) NOT NULL,
-   status ENUM('passed', 'failed', 'warning') NOT NULL,
-   total_records INT,
-   valid_records INT,
-   invalid_records INT,
-   validation_rules JSON,
-   error_details TEXT,
-   run_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-   run_by VARCHAR(100)
 );
