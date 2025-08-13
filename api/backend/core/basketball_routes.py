@@ -6,7 +6,7 @@ Core Basketball Operations Blueprint
 Consolidated routes for Players, Teams, and Games management.
 Serves the core basketball functionality for superfans, coaches, and GMs.
 
-Author: StatPadders Team  
+Author: StatPadders Team
 Course: CS 3200 - Summer 2 2025
 """
 
@@ -26,20 +26,20 @@ basketball = Blueprint('basketball', __name__)
 def get_players():
     """
     Get all players with optional filters.
-    
+
     Query Parameters:
         position: Filter by position (PG, SG, SF, PF, C)
         min_age: Minimum age filter
-        max_age: Maximum age filter  
+        max_age: Maximum age filter
         team_id: Filter by team ID
         min_salary: Minimum salary filter
         max_salary: Maximum salary filter
-        
+
     User Stories: [Johnny-1.2, Johnny-1.3, Andre-4.1, Andre-4.4]
     """
     try:
         current_app.logger.info('GET /basketball/players - Fetching players with filters')
-        
+
         # Extract query parameters
         position = request.args.get('position')
         min_age = request.args.get('min_age', type=int)
@@ -47,12 +47,12 @@ def get_players():
         team_id = request.args.get('team_id', type=int)
         min_salary = request.args.get('min_salary', type=float)
         max_salary = request.args.get('max_salary', type=float)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Build dynamic query with filters
         query = '''
-            SELECT 
+            SELECT
                 p.player_id,
                 p.first_name,
                 p.last_name,
@@ -71,9 +71,9 @@ def get_players():
             LEFT JOIN Teams t ON tp.team_id = t.team_id
             WHERE 1=1
         '''
-        
+
         params = []
-        
+
         # Apply filters dynamically
         if position:
             query += ' AND p.position = %s'
@@ -93,12 +93,12 @@ def get_players():
         if max_salary is not None:
             query += ' AND p.current_salary <= %s'
             params.append(max_salary)
-        
+
         query += ' ORDER BY p.last_name, p.first_name'
-        
+
         cursor.execute(query, params)
         players_data = cursor.fetchall()
-        
+
         return make_response(jsonify({
             'players': players_data,
             'total_count': len(players_data),
@@ -109,7 +109,7 @@ def get_players():
                 'salary_range': f"${min_salary}-${max_salary}" if min_salary or max_salary else None
             }
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching players: {e}')
         return make_response(jsonify({"error": "Failed to fetch players"}), 500)
@@ -119,7 +119,7 @@ def get_players():
 def add_player():
     """
     Add a new player profile to the system.
-    
+
     Expected JSON Body:
         {
             "first_name": "string" (required),
@@ -133,30 +133,30 @@ def add_player():
             "height": "string",
             "weight": int
         }
-        
+
     User Stories: [Mike-2.2]
     """
     try:
         current_app.logger.info('POST /basketball/players - Adding new player')
-        
+
         player_data = request.get_json()
-        
+
         # Validate required fields
         required_fields = ['first_name', 'last_name', 'position', 'age']
         for field in required_fields:
             if field not in player_data:
                 return make_response(jsonify({"error": f"Missing required field: {field}"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Insert new player
         query = '''
             INSERT INTO Players (
-                first_name, last_name, position, age, years_exp, 
+                first_name, last_name, position, age, years_exp,
                 college, current_salary, expected_salary, height, weight
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         '''
-        
+
         values = (
             player_data['first_name'],
             player_data['last_name'],
@@ -169,18 +169,18 @@ def add_player():
             player_data.get('height'),
             player_data.get('weight')
         )
-        
+
         cursor.execute(query, values)
         db.get_db().commit()
-        
+
         new_player_id = cursor.lastrowid
-        
+
         return make_response(jsonify({
             "message": "Player added successfully",
             "player_id": new_player_id,
             "player_name": f"{player_data['first_name']} {player_data['last_name']}"
         }), 201)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error adding player: {e}')
         db.get_db().rollback()
@@ -191,7 +191,7 @@ def add_player():
 def update_player(player_id):
     """
     Update player information.
-    
+
     Expected JSON Body (all fields optional):
         {
             "position": "string",
@@ -203,66 +203,66 @@ def update_player(player_id):
             "height": "string",
             "weight": int
         }
-        
+
     User Stories: [Mike-2.1]
     """
     try:
         current_app.logger.info(f'PUT /basketball/players/{player_id} - Updating player')
-        
+
         player_data = request.get_json()
-        
+
         if not player_data:
             return make_response(jsonify({"error": "No data provided for update"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Check if player exists
         cursor.execute('SELECT player_id FROM Players WHERE player_id = %s', (player_id,))
         if not cursor.fetchone():
             return make_response(jsonify({"error": "Player not found"}), 404)
-        
+
         # Build dynamic update query for Players table
         update_fields = []
         values = []
-        
-        player_fields = ['position', 'age', 'years_exp', 'current_salary', 
+
+        player_fields = ['position', 'age', 'years_exp', 'current_salary',
                         'expected_salary', 'height', 'weight']
-        
+
         for field in player_fields:
             if field in player_data:
                 update_fields.append(f'{field} = %s')
                 values.append(player_data[field])
-        
+
         if update_fields:
             query = f"UPDATE Players SET {', '.join(update_fields)} WHERE player_id = %s"
             values.append(player_id)
             cursor.execute(query, values)
-        
+
         # Handle team assignment separately
         if 'team_id' in player_data:
             new_team_id = player_data['team_id']
-            
+
             # End current team association
             cursor.execute('''
-                UPDATE TeamsPlayers 
-                SET left_date = CURDATE() 
+                UPDATE TeamsPlayers
+                SET left_date = CURDATE()
                 WHERE player_id = %s AND left_date IS NULL
             ''', (player_id,))
-            
+
             # Create new team association
             cursor.execute('''
                 INSERT INTO TeamsPlayers (team_id, player_id, joined_date)
                 VALUES (%s, %s, CURDATE())
             ''', (new_team_id, player_id))
-        
+
         db.get_db().commit()
-        
+
         return make_response(jsonify({
             "message": "Player updated successfully",
             "player_id": player_id,
             "updated_fields": list(player_data.keys())
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error updating player: {e}')
         db.get_db().rollback()
@@ -273,24 +273,24 @@ def update_player(player_id):
 def get_player_stats(player_id):
     """
     Get player's performance statistics.
-    
+
     Query Parameters:
         season: Optional season filter
         game_type: Optional game type filter ('regular', 'playoff')
-        
+
     User Stories: [Johnny-1.1, Johnny-1.3, Johnny-1.4, Andre-4.3]
     """
     try:
         current_app.logger.info(f'GET /basketball/players/{player_id}/stats - Fetching player stats')
-        
+
         season = request.args.get('season')
         game_type = request.args.get('game_type')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Get comprehensive player statistics
         query = '''
-            SELECT 
+            SELECT
                 p.player_id,
                 p.first_name,
                 p.last_name,
@@ -317,27 +317,27 @@ def get_player_stats(player_id):
             LEFT JOIN Game g ON pgs.game_id = g.game_id
             WHERE p.player_id = %s
         '''
-        
+
         params = [player_id]
-        
+
         if season:
             query += ' AND g.season = %s'
             params.append(season)
         if game_type:
             query += ' AND g.game_type = %s'
             params.append(game_type)
-        
+
         query += ' GROUP BY p.player_id, p.first_name, p.last_name, p.position'
-        
+
         cursor.execute(query, params)
         stats_data = cursor.fetchone()
-        
+
         if not stats_data:
             return make_response(jsonify({"error": "Player not found"}), 404)
-        
+
         # Get recent games performance
         cursor.execute('''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 g.home_team_id,
@@ -356,9 +356,9 @@ def get_player_stats(player_id):
             ORDER BY g.game_date DESC
             LIMIT 10
         ''', (player_id,))
-        
+
         recent_games = cursor.fetchall()
-        
+
         response_data = {
             'player_stats': stats_data,
             'recent_games': recent_games,
@@ -367,9 +367,9 @@ def get_player_stats(player_id):
                 'game_type': game_type
             }
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching player stats: {e}')
         return make_response(jsonify({"error": "Failed to fetch player stats"}), 500)
@@ -379,7 +379,7 @@ def get_player_stats(player_id):
 def update_player_stats(player_id):
     """
     Update or add player statistics for a specific game.
-    
+
     Expected JSON Body:
         {
             "game_id": int (required),
@@ -395,44 +395,44 @@ def update_player_stats(player_id):
             "plus_minus": int,
             "minutes_played": int
         }
-        
+
     User Stories: [Mike-2.1]
     """
     try:
         current_app.logger.info(f'PUT /basketball/players/{player_id}/stats - Updating stats')
-        
+
         stats_data = request.get_json()
-        
+
         if 'game_id' not in stats_data:
             return make_response(jsonify({"error": "game_id is required"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Check if stats already exist for this player and game
         cursor.execute('''
-            SELECT * FROM PlayerGameStats 
+            SELECT * FROM PlayerGameStats
             WHERE player_id = %s AND game_id = %s
         ''', (player_id, stats_data['game_id']))
-        
+
         existing_stats = cursor.fetchone()
-        
+
         if existing_stats:
             # Update existing statistics
             update_fields = []
             values = []
-            
+
             stat_fields = ['points', 'rebounds', 'assists', 'steals', 'blocks',
                           'turnovers', 'shooting_percentage', 'three_point_percentage',
                           'free_throw_percentage', 'plus_minus', 'minutes_played']
-            
+
             for field in stat_fields:
                 if field in stats_data:
                     update_fields.append(f'{field} = %s')
                     values.append(stats_data[field])
-            
+
             if update_fields:
                 query = f'''
-                    UPDATE PlayerGameStats 
+                    UPDATE PlayerGameStats
                     SET {', '.join(update_fields)}
                     WHERE player_id = %s AND game_id = %s
                 '''
@@ -447,7 +447,7 @@ def update_player_stats(player_id):
                     free_throw_percentage, plus_minus, minutes_played
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             '''
-            
+
             values = (
                 player_id,
                 stats_data['game_id'],
@@ -463,17 +463,17 @@ def update_player_stats(player_id):
                 stats_data.get('plus_minus', 0),
                 stats_data.get('minutes_played', 0)
             )
-            
+
             cursor.execute(query, values)
-        
+
         db.get_db().commit()
-        
+
         return make_response(jsonify({
             "message": "Player stats updated successfully",
             "player_id": player_id,
             "game_id": stats_data['game_id']
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error updating player stats: {e}')
         db.get_db().rollback()
@@ -488,36 +488,33 @@ def update_player_stats(player_id):
 def get_teams():
     """
     Get all teams with optional filters and roster information.
-    
+
     Query Parameters:
         conference: Filter by conference ('Eastern', 'Western')
         division: Filter by division
         city: Filter by city
-        
+
     User Stories: [Johnny-1.2]
     """
     try:
         current_app.logger.info('GET /basketball/teams - Fetching teams')
-        
+
         conference = request.args.get('conference')
         division = request.args.get('division')
         city = request.args.get('city')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Get teams with roster statistics
         query = '''
-            SELECT 
+            SELECT
                 t.team_id,
                 t.name,
                 t.city,
-                t.state,
                 t.arena,
                 t.conference,
                 t.division,
                 t.coach,
-                t.gm,
-                t.owner,
                 t.championships,
                 t.founded_year,
                 t.offensive_system,
@@ -530,9 +527,9 @@ def get_teams():
             LEFT JOIN Players p ON tp.player_id = p.player_id
             WHERE 1=1
         '''
-        
+
         params = []
-        
+
         if conference:
             query += ' AND t.conference = %s'
             params.append(conference)
@@ -542,17 +539,17 @@ def get_teams():
         if city:
             query += ' AND t.city = %s'
             params.append(city)
-        
+
         query += '''
-            GROUP BY t.team_id, t.name, t.city, t.state, t.arena, 
-                     t.conference, t.division, t.coach, t.gm, t.owner, 
+            GROUP BY t.team_id, t.name, t.city, t.arena,
+                     t.conference, t.division, t.coach,
                      t.championships, t.founded_year, t.offensive_system, t.defensive_system
             ORDER BY t.conference, t.division, t.name
         '''
-        
+
         cursor.execute(query, params)
         teams_data = cursor.fetchall()
-        
+
         return make_response(jsonify({
             'teams': teams_data,
             'total_count': len(teams_data),
@@ -562,7 +559,7 @@ def get_teams():
                 'city': city
             }
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching teams: {e}')
         return make_response(jsonify({"error": "Failed to fetch teams"}), 500)
@@ -572,18 +569,20 @@ def get_teams():
 def get_team_by_id(team_id):
     """
     Get detailed information for a specific team.
-    
+
     User Stories: [Marcus-3.3, Andre-4.2]
     """
     try:
         current_app.logger.info(f'GET /basketball/teams/{team_id} - Fetching team details')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Get comprehensive team details
         query = '''
-            SELECT 
-                t.*,
+            SELECT
+                t.team_id, t.name, t.city, t.conference, t.division, t.coach,
+                t.arena, t.founded_year, t.championships, t.offensive_system,
+                t.defensive_system,
                 COUNT(DISTINCT tp.player_id) AS roster_size,
                 ROUND(AVG(p.age), 1) AS avg_player_age,
                 SUM(p.current_salary) AS total_salary,
@@ -592,18 +591,21 @@ def get_team_by_id(team_id):
             LEFT JOIN TeamsPlayers tp ON t.team_id = tp.team_id AND tp.left_date IS NULL
             LEFT JOIN Players p ON tp.player_id = p.player_id
             WHERE t.team_id = %s
-            GROUP BY t.team_id
+            GROUP BY t.team_id, t.name, t.city, t.conference, t.division, t.coach,
+                t.arena, t.founded_year, t.championships, t.offensive_system,
+                t.defensive_system
         '''
-        
+
+
         cursor.execute(query, (team_id,))
         team_data = cursor.fetchone()
-        
+
         if not team_data:
             return make_response(jsonify({"error": "Team not found"}), 404)
-        
+
         # Get recent games performance
         cursor.execute('''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 g.home_team_id,
@@ -612,7 +614,7 @@ def get_team_by_id(team_id):
                 at.name AS away_team,
                 g.home_score,
                 g.away_score,
-                CASE 
+                CASE
                     WHEN g.home_team_id = %s AND g.home_score > g.away_score THEN 'W'
                     WHEN g.away_team_id = %s AND g.away_score > g.home_score THEN 'W'
                     ELSE 'L'
@@ -624,16 +626,16 @@ def get_team_by_id(team_id):
             ORDER BY g.game_date DESC
             LIMIT 10
         ''', (team_id, team_id, team_id, team_id))
-        
+
         recent_games = cursor.fetchall()
-        
+
         response_data = {
             'team_details': team_data,
             'recent_games': recent_games
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching team details: {e}')
         return make_response(jsonify({"error": "Failed to fetch team"}), 500)
@@ -643,66 +645,62 @@ def get_team_by_id(team_id):
 def update_team(team_id):
     """
     Update team information.
-    
+
     Expected JSON Body (all fields optional):
         {
             "name": "string",
-            "city": "string", 
-            "state": "string",
+            "city": "string",
             "arena": "string",
             "conference": "string",
             "division": "string",
             "coach": "string",
-            "gm": "string",
-            "owner": "string",
             "offensive_system": "string",
             "defensive_system": "string"
         }
-        
+
     User Stories: [Mike-2.1]
     """
     try:
         current_app.logger.info(f'PUT /basketball/teams/{team_id} - Updating team')
-        
+
         team_data = request.get_json()
-        
+
         if not team_data:
             return make_response(jsonify({"error": "No data provided for update"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Build dynamic update query
         update_fields = []
         values = []
-        
-        allowed_fields = ['name', 'city', 'state', 'arena', 'conference', 
-                         'division', 'coach', 'gm', 'owner', 
-                         'offensive_system', 'defensive_system']
-        
+
+        allowed_fields = ['name', 'city', 'arena', 'conference',
+                         'division', 'coach', 'offensive_system', 'defensive_system']
+
         for field in allowed_fields:
             if field in team_data:
                 update_fields.append(f'{field} = %s')
                 values.append(team_data[field])
-        
+
         if not update_fields:
             return make_response(jsonify({"error": "No valid fields to update"}), 400)
-        
+
         query = f"UPDATE Teams SET {', '.join(update_fields)} WHERE team_id = %s"
         values.append(team_id)
-        
+
         cursor.execute(query, values)
-        
+
         if cursor.rowcount == 0:
             return make_response(jsonify({"error": "Team not found"}), 404)
-        
+
         db.get_db().commit()
-        
+
         return make_response(jsonify({
             "message": "Team updated successfully",
             "team_id": team_id,
             "updated_fields": list(team_data.keys())
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error updating team: {e}')
         db.get_db().rollback()
@@ -713,35 +711,35 @@ def update_team(team_id):
 def get_team_players(team_id):
     """
     Get current team roster with detailed player information.
-    
+
     Query Parameters:
         position: Filter by position (PG, SG, SF, PF, C)
         include_stats: If 'true', include player statistics
-        
+
     User Stories: [Marcus-3.3, Andre-4.2]
     """
     try:
         current_app.logger.info(f'GET /basketball/teams/{team_id}/players - Fetching roster')
-        
+
         position = request.args.get('position')
         include_stats = request.args.get('include_stats', 'false').lower() == 'true'
-        
+
         cursor = db.get_db().cursor()
 
         # Build query based on whether stats are requested
         if include_stats:
             query = '''
-                SELECT DISTINCT 
-                    p.player_id, 
-                    p.first_name, 
-                    p.last_name, 
-                    p.position, 
-                    tp.jersey_num, 
-                    tp.joined_date, 
-                    p.age, 
+                SELECT DISTINCT
+                    p.player_id,
+                    p.first_name,
+                    p.last_name,
+                    p.position,
+                    tp.jersey_num,
+                    tp.joined_date,
+                    p.age,
                     p.years_exp,
-                    p.college, 
-                    p.height, 
+                    p.college,
+                    p.height,
                     p.weight,
                     p.current_salary,
                     p.expected_salary,
@@ -750,56 +748,56 @@ def get_team_players(team_id):
                     ROUND(AVG(pgs.rebounds), 1) AS avg_rebounds,
                     ROUND(AVG(pgs.assists), 1) AS avg_assists,
                     ROUND(AVG(pgs.minutes_played), 1) AS avg_minutes
-                FROM Players p 
+                FROM Players p
                 JOIN TeamsPlayers tp ON p.player_id = tp.player_id
                 LEFT JOIN PlayerGameStats pgs ON p.player_id = pgs.player_id
-                WHERE tp.team_id = %s 
+                WHERE tp.team_id = %s
                 AND tp.left_date IS NULL
             '''
         else:
             query = '''
-                SELECT DISTINCT 
-                    p.player_id, 
-                    p.first_name, 
-                    p.last_name, 
-                    p.position, 
-                    tp.jersey_num, 
-                    tp.joined_date, 
+                SELECT DISTINCT
+                    p.player_id,
+                    p.first_name,
+                    p.last_name,
+                    p.position,
+                    tp.jersey_num,
+                    tp.joined_date,
                     p.age,
-                    p.years_exp, 
-                    p.college, 
-                    p.height, 
+                    p.years_exp,
+                    p.college,
+                    p.height,
                     p.weight,
                     p.current_salary,
                     p.expected_salary
-                FROM Players p 
-                JOIN TeamsPlayers tp ON p.player_id = tp.player_id 
-                WHERE tp.team_id = %s 
+                FROM Players p
+                JOIN TeamsPlayers tp ON p.player_id = tp.player_id
+                WHERE tp.team_id = %s
                 AND tp.left_date IS NULL
             '''
-        
+
         params = [team_id]
-        
+
         if position:
             query += ' AND p.position = %s'
             params.append(position)
-        
+
         if include_stats:
             query += '''
                 GROUP BY p.player_id, p.first_name, p.last_name, p.position,
                          tp.jersey_num, tp.joined_date, p.age, p.years_exp,
                          p.college, p.height, p.weight, p.current_salary, p.expected_salary
             '''
-        
+
         query += ' ORDER BY tp.jersey_num, p.last_name'
-        
+
         cursor.execute(query, params)
         roster_data = cursor.fetchall()
-        
+
         # Get team name for context
         cursor.execute('SELECT name FROM Teams WHERE team_id = %s', (team_id,))
         team_info = cursor.fetchone()
-        
+
         response_data = {
             'team_id': team_id,
             'team_name': team_info['name'] if team_info else None,
@@ -808,9 +806,9 @@ def get_team_players(team_id):
             'includes_stats': include_stats,
             'position_filter': position
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching team roster: {e}')
         return make_response(jsonify({"error": "Failed to fetch team roster"}), 500)
@@ -820,24 +818,24 @@ def get_team_players(team_id):
 def add_team_player(team_id):
     """
     Add a player to team roster.
-    
+
     Expected JSON Body:
         {
             "player_id": int (required),
             "jersey_num": int (required),
             "joined_date": "YYYY-MM-DD" (required)
         }
-        
+
     User Stories: [Mike-2.2]
     """
     try:
         current_app.logger.info(f'POST /basketball/teams/{team_id}/players - Adding player to roster')
-        
+
         roster_data = request.get_json()
         player_id = roster_data.get('player_id')
         jersey_num = roster_data.get('jersey_num')
         joined_date = roster_data.get('joined_date')
-        
+
         if not player_id or jersey_num is None or not joined_date:
             return make_response(jsonify({
                 "error": "Missing required fields: player_id, jersey_num, joined_date"
@@ -849,21 +847,21 @@ def add_team_player(team_id):
         cursor.execute('SELECT player_id FROM Players WHERE player_id = %s', (player_id,))
         if not cursor.fetchone():
             return make_response(jsonify({"error": "Player not found"}), 404)
-        
+
         # Check jersey number availability
         cursor.execute('''
-            SELECT player_id FROM TeamsPlayers 
+            SELECT player_id FROM TeamsPlayers
             WHERE team_id = %s AND jersey_num = %s AND left_date IS NULL
         ''', (team_id, jersey_num))
         if cursor.fetchone():
             return make_response(jsonify({
                 "error": f"Jersey number {jersey_num} is already taken"
             }), 409)
-        
+
         # End any existing team association for this player
         cursor.execute('''
-            UPDATE TeamsPlayers 
-            SET left_date = %s 
+            UPDATE TeamsPlayers
+            SET left_date = %s
             WHERE player_id = %s AND left_date IS NULL
         ''', (joined_date, player_id))
 
@@ -872,7 +870,7 @@ def add_team_player(team_id):
             INSERT INTO TeamsPlayers (team_id, player_id, jersey_num, joined_date)
             VALUES (%s, %s, %s, %s)
         '''
-        
+
         cursor.execute(query, (team_id, player_id, jersey_num, joined_date))
         db.get_db().commit()
 
@@ -882,7 +880,7 @@ def add_team_player(team_id):
             "player_id": player_id,
             "jersey_num": jersey_num
         }), 201)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error adding player to roster: {e}')
         db.get_db().rollback()
@@ -893,44 +891,44 @@ def add_team_player(team_id):
 def update_team_player(team_id, player_id):
     """
     Update player's status on team (jersey number, left date, etc.).
-    
+
     Expected JSON Body (all fields optional):
         {
             "jersey_num": int,
             "left_date": "YYYY-MM-DD",
             "status": "active|injured|suspended"
         }
-        
+
     User Stories: [Mike-2.1, Johnny-1.6]
     """
     try:
         current_app.logger.info(f'PUT /basketball/teams/{team_id}/players/{player_id} - Updating player status')
-        
+
         update_data = request.get_json()
-        
+
         if not update_data:
             return make_response(jsonify({"error": "No data provided for update"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Verify player-team association exists
         cursor.execute('''
-            SELECT * FROM TeamsPlayers 
+            SELECT * FROM TeamsPlayers
             WHERE team_id = %s AND player_id = %s AND left_date IS NULL
         ''', (team_id, player_id))
-        
+
         if not cursor.fetchone():
             return make_response(jsonify({"error": "Player not found on this team"}), 404)
-        
+
         # Build dynamic update query
         update_fields = []
         values = []
-        
+
         if 'jersey_num' in update_data:
             jersey_num = update_data['jersey_num']
             # Check if new jersey number is available
             cursor.execute('''
-                SELECT player_id FROM TeamsPlayers 
+                SELECT player_id FROM TeamsPlayers
                 WHERE team_id = %s AND jersey_num = %s AND player_id != %s AND left_date IS NULL
             ''', (team_id, jersey_num, player_id))
             if cursor.fetchone():
@@ -939,35 +937,35 @@ def update_team_player(team_id, player_id):
                 }), 409)
             update_fields.append('jersey_num = %s')
             values.append(jersey_num)
-        
+
         if 'left_date' in update_data:
             update_fields.append('left_date = %s')
             values.append(update_data['left_date'])
-        
+
         if 'status' in update_data:
             update_fields.append('status = %s')
             values.append(update_data['status'])
-        
+
         if not update_fields:
             return make_response(jsonify({"error": "No valid fields to update"}), 400)
 
         query = f'''
-            UPDATE TeamsPlayers 
+            UPDATE TeamsPlayers
             SET {', '.join(update_fields)}
             WHERE team_id = %s AND player_id = %s AND left_date IS NULL
         '''
-        
+
         values.extend([team_id, player_id])
         cursor.execute(query, values)
         db.get_db().commit()
-        
+
         return make_response(jsonify({
             "message": "Player status updated successfully",
             "team_id": team_id,
             "player_id": player_id,
             "updated_fields": list(update_data.keys())
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error updating player status: {e}')
         db.get_db().rollback()
@@ -982,7 +980,7 @@ def update_team_player(team_id, player_id):
 def get_games():
     """
     Get games list with optional filters.
-    
+
     Query Parameters:
         team_id: Filter by team (home or away)
         start_date: Filter games from this date (YYYY-MM-DD)
@@ -990,12 +988,12 @@ def get_games():
         season: Filter by season
         game_type: Filter by game type ('regular', 'playoff')
         status: Filter by status ('scheduled', 'in_progress', 'completed')
-        
+
     User Stories: [Johnny-1.5, Marcus-3.6]
     """
     try:
         current_app.logger.info('GET /basketball/games - Fetching games schedule')
-        
+
         # Extract query parameters
         team_id = request.args.get('team_id', type=int)
         start_date = request.args.get('start_date')
@@ -1003,12 +1001,12 @@ def get_games():
         season = request.args.get('season')
         game_type = request.args.get('game_type')
         status = request.args.get('status')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Build comprehensive games query
         query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
@@ -1025,7 +1023,7 @@ def get_games():
                 g.status,
                 g.attendance,
                 g.venue,
-                CASE 
+                CASE
                     WHEN g.home_score > g.away_score THEN ht.name
                     WHEN g.away_score > g.home_score THEN at.name
                     ELSE NULL
@@ -1035,9 +1033,9 @@ def get_games():
             JOIN Teams at ON g.away_team_id = at.team_id
             WHERE 1=1
         '''
-        
+
         params = []
-        
+
         # Apply filters dynamically
         if team_id:
             query += ' AND (g.home_team_id = %s OR g.away_team_id = %s)'
@@ -1057,17 +1055,17 @@ def get_games():
         if status:
             query += ' AND g.status = %s'
             params.append(status)
-        
+
         query += ' ORDER BY g.game_date DESC'
-        
+
         cursor.execute(query, params)
         games_data = cursor.fetchall()
-        
+
         # Calculate summary statistics
         completed_games = len([g for g in games_data if g['status'] == 'completed'])
         scheduled_games = len([g for g in games_data if g['status'] == 'scheduled'])
         in_progress_games = len([g for g in games_data if g['status'] == 'in_progress'])
-        
+
         response_data = {
             'games': games_data,
             'summary': {
@@ -1084,9 +1082,9 @@ def get_games():
                 'status': status
             }
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching games: {e}')
         return make_response(jsonify({"error": "Failed to fetch games"}), 500)
@@ -1096,7 +1094,7 @@ def get_games():
 def create_game():
     """
     Create a new game.
-    
+
     Expected JSON Body:
         {
             "game_date": "YYYY-MM-DD" (required),
@@ -1109,67 +1107,67 @@ def create_game():
             "venue": "string" (optional),
             "attendance": int (optional)
         }
-        
+
     User Stories: [Mike-2.1]
     """
     try:
         current_app.logger.info('POST /basketball/games - Creating new game')
-        
+
         game_data = request.get_json()
-        
+
         # Validate required fields
         required_fields = ['game_date', 'home_team_id', 'away_team_id', 'season']
         for field in required_fields:
             if field not in game_data:
                 return make_response(jsonify({"error": f"Missing required field: {field}"}), 400)
-        
+
         # Business logic validations
         if game_data['home_team_id'] == game_data['away_team_id']:
             return make_response(jsonify({"error": "Home and away teams must be different"}), 400)
-        
+
         # Validate enums
         valid_game_types = ['regular', 'playoff']
         if 'game_type' in game_data and game_data['game_type'] not in valid_game_types:
             return make_response(jsonify({
                 "error": f"Invalid game_type. Must be one of: {valid_game_types}"
             }), 400)
-        
+
         valid_statuses = ['scheduled', 'in_progress', 'completed']
         if 'status' in game_data and game_data['status'] not in valid_statuses:
             return make_response(jsonify({
                 "error": f"Invalid status. Must be one of: {valid_statuses}"
             }), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Verify both teams exist
-        cursor.execute('SELECT team_id FROM Teams WHERE team_id IN (%s, %s)', 
+        cursor.execute('SELECT team_id FROM Teams WHERE team_id IN (%s, %s)',
                       (game_data['home_team_id'], game_data['away_team_id']))
-        
+
         if cursor.rowcount != 2:
             return make_response(jsonify({"error": "One or both teams not found"}), 404)
-        
+
         # Check for duplicate game
         cursor.execute('''
-            SELECT game_id FROM Game 
-            WHERE game_date = %s 
-            AND home_team_id = %s 
+            SELECT game_id FROM Game
+            WHERE game_date = %s
+            AND home_team_id = %s
             AND away_team_id = %s
         ''', (game_data['game_date'], game_data['home_team_id'], game_data['away_team_id']))
-        
+
         if cursor.fetchone():
             return make_response(jsonify({
                 "error": "Game already exists for these teams on this date"
             }), 409)
-        
+
         # Insert new game
         query = '''
             INSERT INTO Game (
-                game_date, game_time, home_team_id, away_team_id, 
+                game_date, game_time, home_team_id, away_team_id,
                 home_score, away_score, season, game_type, status, venue, attendance
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         '''
-        
+
         values = (
             game_data['game_date'],
             game_data.get('game_time'),
@@ -1183,17 +1181,17 @@ def create_game():
             game_data.get('venue'),
             game_data.get('attendance')
         )
-        
+
         cursor.execute(query, values)
         db.get_db().commit()
-        
+
         new_game_id = cursor.lastrowid
-        
+
         return make_response(jsonify({
             "message": "Game created successfully",
             "game_id": new_game_id
         }), 201)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error creating game: {e}')
         db.get_db().rollback()
@@ -1204,17 +1202,17 @@ def create_game():
 def get_game_details(game_id):
     """
     Get detailed information for a specific game including player stats.
-    
+
     User Stories: [Johnny-1.5, Marcus-3.6]
     """
     try:
         current_app.logger.info(f'GET /basketball/games/{game_id} - Fetching game details')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Get comprehensive game details
         query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
@@ -1238,16 +1236,16 @@ def get_game_details(game_id):
             JOIN Teams at ON g.away_team_id = at.team_id
             WHERE g.game_id = %s
         '''
-        
+
         cursor.execute(query, (game_id,))
         game_data = cursor.fetchone()
-        
+
         if not game_data:
             return make_response(jsonify({"error": "Game not found"}), 404)
-        
+
         # Get player statistics for this game
         cursor.execute('''
-            SELECT 
+            SELECT
                 pgs.player_id,
                 pgs.game_id,
                 pgs.points,
@@ -1273,22 +1271,22 @@ def get_game_details(game_id):
             WHERE pgs.game_id = %s
             ORDER BY tp.team_id, pgs.points DESC
         ''', (game_id,))
-        
+
         player_stats = cursor.fetchall()
-        
+
         # Separate stats by team
         home_team_stats = [stat for stat in player_stats if stat['team_id'] == game_data['home_team_id']]
         away_team_stats = [stat for stat in player_stats if stat['team_id'] == game_data['away_team_id']]
-        
+
         response_data = {
             'game_details': game_data,
             'home_team_stats': home_team_stats,
             'away_team_stats': away_team_stats,
             'total_players': len(player_stats)
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching game details: {e}')
         return make_response(jsonify({"error": "Failed to fetch game details"}), 500)
@@ -1298,7 +1296,7 @@ def get_game_details(game_id):
 def update_game(game_id):
     """
     Update game information and scores.
-    
+
     Expected JSON Body (all fields optional):
         {
             "game_date": "YYYY-MM-DD",
@@ -1311,24 +1309,24 @@ def update_game(game_id):
             "venue": "string",
             "attendance": int
         }
-        
+
     User Stories: [Mike-2.1]
     """
     try:
         current_app.logger.info(f'PUT /basketball/games/{game_id} - Updating game')
-        
+
         game_data = request.get_json()
-        
+
         if not game_data:
             return make_response(jsonify({"error": "No data provided for update"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Verify game exists
         cursor.execute('SELECT game_id FROM Game WHERE game_id = %s', (game_id,))
         if not cursor.fetchone():
             return make_response(jsonify({"error": "Game not found"}), 404)
-        
+
         # Validate enum fields
         if 'game_type' in game_data:
             valid_game_types = ['regular', 'playoff']
@@ -1336,51 +1334,51 @@ def update_game(game_id):
                 return make_response(jsonify({
                     "error": f"Invalid game_type. Must be one of: {valid_game_types}"
                 }), 400)
-        
+
         if 'status' in game_data:
             valid_statuses = ['scheduled', 'in_progress', 'completed']
             if game_data['status'] not in valid_statuses:
                 return make_response(jsonify({
                     "error": f"Invalid status. Must be one of: {valid_statuses}"
                 }), 400)
-        
+
         # Validate score values
         for score_field in ['home_score', 'away_score']:
             if score_field in game_data and game_data[score_field] < 0:
                 return make_response(jsonify({
                     "error": f"{score_field} cannot be negative"
                 }), 400)
-        
+
         if 'attendance' in game_data and game_data['attendance'] < 0:
             return make_response(jsonify({"error": "Attendance cannot be negative"}), 400)
-        
+
         # Build dynamic update query
         update_fields = []
         values = []
-        
-        allowed_fields = ['game_date', 'game_time', 'home_score', 'away_score', 
+
+        allowed_fields = ['game_date', 'game_time', 'home_score', 'away_score',
                          'season', 'game_type', 'status', 'venue', 'attendance']
-        
+
         for field in allowed_fields:
             if field in game_data:
                 update_fields.append(f'{field} = %s')
                 values.append(game_data[field])
-        
+
         if not update_fields:
             return make_response(jsonify({"error": "No valid fields to update"}), 400)
-        
+
         query = f"UPDATE Game SET {', '.join(update_fields)} WHERE game_id = %s"
         values.append(game_id)
-        
+
         cursor.execute(query, values)
         db.get_db().commit()
-        
+
         return make_response(jsonify({
             "message": "Game updated successfully",
             "game_id": game_id,
             "updated_fields": list(game_data.keys())
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error updating game: {e}')
         db.get_db().rollback()
@@ -1391,27 +1389,27 @@ def update_game(game_id):
 def get_upcoming_games():
     """
     Get upcoming games for the next specified days.
-    
+
     Query Parameters:
         days: Number of days to look ahead (default: 7)
         team_id: Filter by specific team
-        
+
     User Stories: [Johnny-1.5, Marcus-3.6]
     """
     try:
         current_app.logger.info('GET /basketball/games/upcoming - Fetching upcoming games')
-        
+
         days = request.args.get('days', 7, type=int)
         team_id = request.args.get('team_id', type=int)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Calculate date range
         today = datetime.now().date()
         end_date = today + timedelta(days=days)
-        
+
         query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
@@ -1428,18 +1426,18 @@ def get_upcoming_games():
             WHERE g.game_date BETWEEN %s AND %s
             AND g.status IN ('scheduled', 'in_progress')
         '''
-        
+
         params = [today, end_date]
-        
+
         if team_id:
             query += ' AND (g.home_team_id = %s OR g.away_team_id = %s)'
             params.extend([team_id, team_id])
-        
+
         query += ' ORDER BY g.game_date, g.game_time'
-        
+
         cursor.execute(query, params)
         upcoming_games = cursor.fetchall()
-        
+
         response_data = {
             'upcoming_games': upcoming_games,
             'date_range': {
@@ -1449,9 +1447,9 @@ def get_upcoming_games():
             },
             'total_games': len(upcoming_games)
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching upcoming games: {e}')
         return make_response(jsonify({"error": "Failed to fetch upcoming games"}), 500)
@@ -1461,49 +1459,49 @@ def get_upcoming_games():
 def get_team_schedule(team_id):
     """
     Get a specific team's schedule with win/loss records.
-    
+
     Query Parameters:
         season: Optional season filter
         status: Optional status filter
-        
+
     User Stories: [Marcus-3.6, Johnny-1.5]
     """
     try:
         current_app.logger.info(f'GET /basketball/teams/{team_id}/schedule - Fetching team schedule')
-        
+
         season = request.args.get('season')
         status = request.args.get('status')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Verify team exists
         cursor.execute('SELECT team_id, name FROM Teams WHERE team_id = %s', (team_id,))
         team_info = cursor.fetchone()
-        
+
         if not team_info:
             return make_response(jsonify({"error": "Team not found"}), 404)
-        
+
         query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 TIME_FORMAT(g.game_time, '%%H:%%i:%%s') AS game_time,
                 g.home_team_id,
                 g.away_team_id,
-                CASE 
+                CASE
                     WHEN g.home_team_id = %s THEN 'Home'
                     ELSE 'Away'
                 END AS home_away,
-                CASE 
+                CASE
                     WHEN g.home_team_id = %s THEN at.name
                     ELSE ht.name
                 END AS opponent,
                 g.home_score,
                 g.away_score,
-                CASE 
+                CASE
                     WHEN g.status = 'completed' THEN
-                        CASE 
-                            WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR 
+                        CASE
+                            WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR
                                  (g.away_team_id = %s AND g.away_score > g.home_score) THEN 'W'
                             ELSE 'L'
                         END
@@ -1518,26 +1516,26 @@ def get_team_schedule(team_id):
             JOIN Teams at ON g.away_team_id = at.team_id
             WHERE (g.home_team_id = %s OR g.away_team_id = %s)
         '''
-        
+
         params = [team_id, team_id, team_id, team_id, team_id, team_id]
-        
+
         if season:
             query += ' AND g.season = %s'
             params.append(season)
         if status:
             query += ' AND g.status = %s'
             params.append(status)
-        
+
         query += ' ORDER BY g.game_date DESC'
-        
+
         cursor.execute(query, params)
         schedule = cursor.fetchall()
-        
+
         # Calculate team record
         completed_games = [g for g in schedule if g['result'] is not None]
         wins = len([g for g in completed_games if g['result'] == 'W'])
         losses = len([g for g in completed_games if g['result'] == 'L'])
-        
+
         response_data = {
             'team_id': team_id,
             'team_name': team_info['name'],
@@ -1553,9 +1551,9 @@ def get_team_schedule(team_id):
                 'status': status
             }
         }
-        
+
         return make_response(jsonify(response_data), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error fetching team schedule: {e}')
         return make_response(jsonify({"error": "Failed to fetch team schedule"}), 500)
@@ -1566,28 +1564,28 @@ def delete_game(game_id):
     """
     Delete a game (admin function).
     This will cascade delete all related player stats.
-    
+
     User Stories: [Mike-2.3] (Data cleanup)
     """
     try:
         current_app.logger.info(f'DELETE /basketball/games/{game_id} - Deleting game')
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Verify game exists
         cursor.execute('SELECT game_id FROM Game WHERE game_id = %s', (game_id,))
         if not cursor.fetchone():
             return make_response(jsonify({"error": "Game not found"}), 404)
-        
+
         # Delete the game (cascades to PlayerGameStats)
         cursor.execute('DELETE FROM Game WHERE game_id = %s', (game_id,))
         db.get_db().commit()
-        
+
         return make_response(jsonify({
             "message": "Game deleted successfully",
             "game_id": game_id
         }), 200)
-        
+
     except Exception as e:
         current_app.logger.error(f'Error deleting game: {e}')
         db.get_db().rollback()
