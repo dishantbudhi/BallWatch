@@ -72,8 +72,8 @@ if st.session_state.auto_refresh:
 
 st.divider()
 
-# Fetch system health data
-health_data = api_get('/admin/system-health')
+# Fetch system health data - FIXED: removed /admin from endpoint
+health_data = api_get('/system-health')
 
 if health_data:
     # System Status Overview
@@ -183,7 +183,7 @@ with col2:
 with col3:
     resolved_filter = st.selectbox("Status", ["All", "Resolved", "Unresolved"])
 
-# Fetch error logs
+# Fetch error logs - FIXED: removed /admin from endpoint
 params = {}
 if severity_filter != "All":
     params['severity'] = severity_filter
@@ -195,7 +195,7 @@ elif resolved_filter == "Unresolved":
     params['resolved'] = 'false'
 
 query_params = "&".join([f"{k}={v}" for k, v in params.items()])
-endpoint = f"/admin/error-logs?{query_params}" if query_params else "/admin/error-logs"
+endpoint = f"/error-logs?{query_params}" if query_params else "/error-logs"
 
 error_data = api_get(endpoint)
 
@@ -317,7 +317,8 @@ with col1:
     
     if st.button("Run Validation", type="primary"):
         with st.spinner("Running validation check..."):
-            result = api_post('/admin/data-validation', {
+            # FIXED: removed /admin from endpoint
+            result = api_post('/data-validation', {
                 'validation_type': validation_type,
                 'table_name': table_name,
                 'run_by': 'Mike Lewis'
@@ -336,7 +337,8 @@ with col1:
 
 with col2:
     st.write("**Recent Validation Results**")
-    validation_data = api_get('/admin/data-validation?days=7')
+    # FIXED: removed /admin from endpoint
+    validation_data = api_get('/data-validation?days=7')
     
     if validation_data:
         reports = validation_data.get('reports', [])
