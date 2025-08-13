@@ -49,7 +49,7 @@ user_options = {
     "Mike Lewis - Data Engineer": {
         "role": "data_engineer", 
         "first_name": "Mike",
-        "page": "pages/20_Data_Engineer_Home.py", #update this
+        "page": "pages/20_Data_Engineer_Home.py",
         "bio": "Mike has a B.S. in Computer Science and 7 years of experience as a data engineer, specializing in real-time data pipelines and sports analytics. He's passionate about basketball and joined BallWatch to help elevate the game through better backend systems. Mike's primary responsibility is to ensure that BallWatch's data infrastructure stays reliable, accurate, and scalable. He manages ingestion from live APIs, updates datasets post-game, and occasionally runs manual queries for analysts or coaches. He also supports feature development by designing new tables or optimizing old ones."
     },
     "Marcus Thompson - Head Coach": {
@@ -61,8 +61,8 @@ user_options = {
     "Andre Wu - General Manager": {
         "role": "general_manager",
         "first_name": "Andre", 
-        "page": "pages/20_Admin_Home.py", #update this
-        "bio": "Andre Wu is the new general manager for the Brooklyn Nets. Historically plagued with losing seasons, Brooklyn is tired of losing and has high expectations for Andre Wu in his first season as the organization's general. Andre Wu plans to rely heavily on advanced analytics and statistics to help rebuild the Nets organization."
+        "page": "pages/40_General_Manager_Home.py", #update this
+        "bio": "Andre Wu is the new general manager for the Brooklyn Nets. Historically plagued with losing seasons, Brooklyn is tired of losing and has high expectations for Andre Wu in his first season as the organization's general manager. Andre Wu plans to rely heavily on advanced analytics and statistics to help rebuild the Nets organization."
     }
 }
 

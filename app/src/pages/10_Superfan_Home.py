@@ -15,7 +15,7 @@ st.write('### What would you like to do today?')
 if st.button('Game Stats',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/21_Scouting_Reports.py')
+    st.switch_page('pages/11_Player_Stats.py')
 
 if st.button('Player Stats',
              type='primary',

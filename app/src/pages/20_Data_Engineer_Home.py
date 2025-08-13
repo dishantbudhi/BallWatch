@@ -20,3 +20,8 @@ if st.button('System Health',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/22_System_Health.py')
+
+if st.button('Data Logs and Cleanup',
+                type='primary',
+                use_container_width=True):
+        st.switch_page('pages/23_Data_Cleanup.py')
