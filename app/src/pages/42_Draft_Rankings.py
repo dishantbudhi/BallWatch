@@ -31,7 +31,7 @@ def make_request(endpoint, method='GET', data=None):
 st.header("Update Player Evaluation")
 
 if st.button("Load Current Rankings"):
-    data = make_request("/api/draft-evaluations")
+    data = make_request("/strategy/draft-evaluations")
     if data and 'evaluations' in data:
         st.session_state['evaluations'] = data['evaluations']
         st.success(f"Loaded {len(data['evaluations'])} player evaluations")
@@ -84,7 +84,7 @@ if 'evaluations' in st.session_state:
                 "scout_notes": scout_notes
             }
             
-            result = make_request(f"/api/draft-evaluations/{current['evaluation_id']}", 
+            result = make_request(f"/strategy/draft-evaluations/{current['evaluation_id']}", 
                                 method='PUT', data=update_data)
             
             if result:

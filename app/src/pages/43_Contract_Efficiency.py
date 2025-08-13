@@ -35,12 +35,12 @@ def make_request(endpoint, method='GET', data=None):
 # Load data
 if st.button("Load Free Agent Data"):
     # Load players data
-    players_data = make_request("/api/players")
+    players_data = make_request("/basketball/players")
     if players_data and 'players' in players_data:
         st.session_state['players'] = players_data['players']
         
     # Load evaluations for contract efficiency analysis
-    eval_data = make_request("/api/draft-evaluations")
+    eval_data = make_request("/strategy/draft-evaluations")
     if eval_data and 'evaluations' in eval_data:
         st.session_state['evaluations'] = eval_data['evaluations']
         st.success(f"Loaded {len(eval_data['evaluations'])} player evaluations")
@@ -69,7 +69,7 @@ if 'evaluations' in st.session_state:
         df['estimated_salary'] = (df['overall_rating'] * 0.5).round(1)
         df['value_score'] = (df['overall_rating'] / (df['estimated_salary'] + 1)).round(2)
         df['contract_efficiency'] = df['value_score'].apply(
-            lambda x: '💎 Excellent' if x > 5 else ('✅ Good' if x > 3 else ('⚠️ Fair' if x > 2 else '❌ Poor'))
+            lambda x: 'Excellent' if x > 5 else ('Good' if x > 3 else ('Fair' if x > 2 else 'Poor'))
         )
         
         # Top metrics
@@ -123,7 +123,7 @@ if 'evaluations' in st.session_state:
                 )
                 fig.add_annotation(
                     x=available_cap/2, y=85, 
-                    text="🎯 Target Zone", 
+                    text="Target Zone", 
                     showarrow=False,
                     font=dict(color="green", size=12)
                 )
@@ -131,7 +131,7 @@ if 'evaluations' in st.session_state:
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
-                st.subheader("💎 Best Values")
+                st.subheader("Best Values")
                 
                 best_values = df.nlargest(5, 'value_score')
                 for _, player in best_values.iterrows():
@@ -197,7 +197,7 @@ if 'evaluations' in st.session_state:
                 )
                 st.plotly_chart(fig_rating, use_container_width=True)
             
-            # Salary vs Rating correlation (without trendline to avoid statsmodels dependency)
+            # Salary vs Rating correlation
             st.subheader("Market Rate Analysis")
             
             fig_correlation = px.scatter(
@@ -209,9 +209,8 @@ if 'evaluations' in st.session_state:
                 labels={'overall_rating': 'Overall Rating', 'estimated_salary': 'Estimated Salary ($M)'}
             )
             
-            # Add manual trend line (simple linear approximation)
+            # Add manual trend line
             if len(df) > 1:
-                # Simple linear approximation
                 x_min, x_max = df['overall_rating'].min(), df['overall_rating'].max()
                 y_min, y_max = df['estimated_salary'].min(), df['estimated_salary'].max()
                 
@@ -350,9 +349,9 @@ if 'evaluations' in st.session_state:
                         # Fit analysis
                         if offered_salary <= available_cap:
                             remaining_cap = available_cap - offered_salary
-                            st.success(f"✅ Fits in cap space. Remaining: ${remaining_cap:.1f}M")
+                            st.success(f"Fits in cap space. Remaining: ${remaining_cap:.1f}M")
                         else:
-                            st.error(f"❌ Exceeds cap by ${offered_salary - available_cap:.1f}M")
+                            st.error(f"Exceeds cap by ${offered_salary - available_cap:.1f}M")
             
             # Signing recommendations
             st.subheader("Strategic Recommendations")
@@ -363,22 +362,22 @@ if 'evaluations' in st.session_state:
                 # High value targets
                 high_value_players = df[df['value_score'] >= 4].nlargest(3, 'overall_rating')
                 
-                st.success("💎 **High Value Targets**")
+                st.success("**High Value Targets**")
                 for _, player in high_value_players.iterrows():
                     st.write(f"• {player['first_name']} {player['last_name']} - {player['value_score']:.2f}")
             
             with rec_col2:
-                # Position needs (simplified)
+                # Position needs
                 affordable_players = df[df['estimated_salary'] <= available_cap]
                 position_counts = affordable_players['position'].value_counts() if 'position' in affordable_players.columns else pd.Series()
                 
-                st.info("🎯 **Available by Position**")
+                st.info("**Available by Position**")
                 for pos, count in position_counts.head(5).items():
                     st.write(f"• {pos}: {count} players")
             
             with rec_col3:
                 # Budget strategy
-                st.warning("💰 **Budget Strategy**")
+                st.warning("**Budget Strategy**")
                 st.write(f"• Max signing: ${available_cap:.1f}M")
                 st.write(f"• Multiple targets: 2-3 players")
                 st.write(f"• Reserve: ${max(5, available_cap * 0.2):.1f}M")

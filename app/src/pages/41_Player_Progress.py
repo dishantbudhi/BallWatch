@@ -34,13 +34,13 @@ def make_request(endpoint, method='GET', data=None):
 
 # Load data
 if st.button("Load Player Data"):
-    players_data = make_request("/api/players")
+    players_data = make_request("/basketball/players")
     if players_data and 'players' in players_data:
         st.session_state['players'] = players_data['players']
         st.success(f"Loaded {len(players_data['players'])} players")
 
     # Also load evaluations for development insights
-    eval_data = make_request("/api/draft-evaluations")
+    eval_data = make_request("/strategy/draft-evaluations")
     if eval_data and 'evaluations' in eval_data:
         st.session_state['evaluations'] = eval_data['evaluations']
 
@@ -218,7 +218,7 @@ if 'players' in st.session_state or 'evaluations' in st.session_state:
                 
                 # Calculate development priority
                 df['growth_potential'] = df['potential_rating'] - df['overall_rating']
-                df['development_priority'] = df['growth_potential']  # Simplified priority calculation
+                df['development_priority'] = df['growth_potential']
                 
                 # Sort by development priority
                 df_sorted = df.nlargest(10, 'development_priority')
@@ -243,7 +243,7 @@ if 'players' in st.session_state or 'evaluations' in st.session_state:
                 if not df_sorted.empty:
                     dev_table = df_sorted[['first_name', 'last_name', 'position', 'overall_rating', 'potential_rating', 'growth_potential']].copy()
                     dev_table['recommendation'] = dev_table['growth_potential'].apply(
-                        lambda x: '🔴 Priority Focus' if x > 20 else '🟡 Regular Development' if x > 10 else '🟢 Maintain Current'
+                        lambda x: 'Priority Focus' if x > 20 else 'Regular Development' if x > 10 else 'Maintain Current'
                     )
                     
                     st.dataframe(

@@ -371,7 +371,7 @@ def get_draft_evaluations():
         evaluations = cursor.fetchall()
         
         response_data = {
-            'draft_evaluations': evaluations,
+            'evaluations': evaluations,
             'total_evaluations': len(evaluations),
             'filters': {
                 'position': position,
