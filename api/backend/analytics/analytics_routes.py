@@ -18,53 +18,49 @@ analytics = Blueprint('analytics', __name__)
 def get_player_matchups():
     """
     Get comprehensive matchup analysis between two players.
-    
+
     Query parameters:
     - player1_id: first player ID (required)
     - player2_id: second player ID (required)
     - season: optional season filter
-    
+
     Returns:
         JSON: Head-to-head matchup data and performance comparison
     """
     try:
         current_app.logger.info('GET /player-matchups handler started')
-        
+
         # Extract and validate parameters
         player1_id = request.args.get('player1_id', type=int)
         player2_id = request.args.get('player2_id', type=int)
         season = request.args.get('season')
-        
+
         if not player1_id or not player2_id:
             return make_response(jsonify({
                 "error": "Both player1_id and player2_id are required"
             }), 400)
-        
+
         cursor = db.get_db().cursor()
-        
-        # Get head-to-head games where both players participated
+
+        # This query now correctly determines the winning player based on their team's game result
+        # by joining TeamsPlayers for both players to find their team at the time of the game.
         matchup_query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
-                g.home_team_id,
-                g.away_team_id,
                 ht.name AS home_team,
                 at.name AS away_team,
-                pgs1.player_id AS player1_id,
-                p1.first_name AS player1_first_name,
-                p1.last_name AS player1_last_name,
                 pgs1.points AS player1_points,
                 pgs1.rebounds AS player1_rebounds,
                 pgs1.assists AS player1_assists,
-                pgs1.minutes_played AS player1_minutes,
-                pgs2.player_id AS player2_id,
-                p2.first_name AS player2_first_name,
-                p2.last_name AS player2_last_name,
                 pgs2.points AS player2_points,
                 pgs2.rebounds AS player2_rebounds,
                 pgs2.assists AS player2_assists,
-                pgs2.minutes_played AS player2_minutes
+                CASE
+                    WHEN (tp1.team_id = g.home_team_id AND g.home_score > g.away_score) OR 
+                         (tp1.team_id = g.away_team_id AND g.away_score > g.home_score) THEN 1
+                    ELSE 0
+                END AS player1_win
             FROM Game g
             JOIN Teams ht ON g.home_team_id = ht.team_id
             JOIN Teams at ON g.away_team_id = at.team_id
@@ -72,31 +68,33 @@ def get_player_matchups():
             JOIN PlayerGameStats pgs2 ON g.game_id = pgs2.game_id AND pgs2.player_id = %s
             JOIN Players p1 ON pgs1.player_id = p1.player_id
             JOIN Players p2 ON pgs2.player_id = p2.player_id
+            JOIN TeamsPlayers tp1 ON p1.player_id = tp1.player_id AND tp1.joined_date <= g.game_date AND (tp1.left_date IS NULL OR tp1.left_date >= g.game_date)
+            JOIN TeamsPlayers tp2 ON p2.player_id = tp2.player_id AND tp2.joined_date <= g.game_date AND (tp2.left_date IS NULL OR tp2.left_date >= g.game_date)
             WHERE 1=1
         '''
-        
+
         params = [player1_id, player2_id]
-        
+
         # Apply season filter if provided
         if season:
             matchup_query += ' AND g.season = %s'
             params.append(season)
-        
+
         matchup_query += ' ORDER BY g.game_date DESC'
-        
+
         cursor.execute(matchup_query, params)
         matchup_games = cursor.fetchall()
-        
+
         # Calculate aggregated comparison statistics
         if matchup_games:
             player1_avg_points = sum(g['player1_points'] for g in matchup_games) / len(matchup_games)
             player2_avg_points = sum(g['player2_points'] for g in matchup_games) / len(matchup_games)
-            player1_wins = sum(1 for g in matchup_games if g['player1_points'] > g['player2_points'])
+            player1_wins = sum(g['player1_win'] for g in matchup_games)
             player2_wins = len(matchup_games) - player1_wins
         else:
             player1_avg_points = player2_avg_points = 0
             player1_wins = player2_wins = 0
-        
+
         response_data = {
             'matchup_games': matchup_games,
             'total_matchups': len(matchup_games),
@@ -113,12 +111,12 @@ def get_player_matchups():
                 }
             }
         }
-        
+
         current_app.logger.info(f'Successfully analyzed matchup between players {player1_id} and {player2_id}')
         response = make_response(jsonify(response_data))
         response.status_code = 200
         return response
-        
+
     except Exception as e:
         current_app.logger.error(f'Error in get_player_matchups: {str(e)}')
         return make_response(jsonify({"error": "Failed to fetch player matchups"}), 500)
@@ -130,91 +128,93 @@ def get_player_matchups():
 def get_opponent_reports():
     """
     Get comprehensive opponent team analysis and scouting information.
-    
+
     Query parameters:
     - team_id: your team ID (required)
     - opponent_id: opponent team ID (required)
     - last_n_games: number of recent games to analyze (default: 10)
-    
+
     Returns:
         JSON: Complete opponent analysis with key players and performance trends
     """
     try:
         current_app.logger.info('GET /opponent-reports handler started')
-        
+
         # Extract and validate parameters
         team_id = request.args.get('team_id', type=int)
         opponent_id = request.args.get('opponent_id', type=int)
         last_n_games = request.args.get('last_n_games', 10, type=int)
-        
+
         if not team_id or not opponent_id:
             return make_response(jsonify({
                 "error": "Both team_id and opponent_id are required"
             }), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         # Get opponent team information
         opponent_info_query = '''
-            SELECT 
-                t.*,
+            SELECT
+                t.team_id, t.name, t.city, t.conference, t.division, t.coach, t.arena,
+                t.founded_year, t.championships, t.offensive_system, t.defensive_system,
                 COUNT(DISTINCT tp.player_id) AS roster_size,
                 ROUND(AVG(p.age), 1) AS avg_age
             FROM Teams t
             LEFT JOIN TeamsPlayers tp ON t.team_id = tp.team_id AND tp.left_date IS NULL
             LEFT JOIN Players p ON tp.player_id = p.player_id
             WHERE t.team_id = %s
-            GROUP BY t.team_id
+            GROUP BY t.team_id, t.name, t.city, t.conference, t.division, t.coach, t.arena,
+                t.founded_year, t.championships, t.offensive_system, t.defensive_system
         '''
-        
+
         cursor.execute(opponent_info_query, (opponent_id,))
         opponent_info = cursor.fetchone()
-        
+
         if not opponent_info:
             return make_response(jsonify({"error": "Opponent team not found"}), 404)
-        
+
         # Get recent head-to-head history
         head_to_head_query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
                 g.home_team_id,
                 g.away_team_id,
                 g.home_score,
                 g.away_score,
-                CASE 
-                    WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR 
+                CASE
+                    WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR
                          (g.away_team_id = %s AND g.away_score > g.home_score) THEN 'W'
                     ELSE 'L'
                 END AS your_team_result
             FROM Game g
-            WHERE ((g.home_team_id = %s AND g.away_team_id = %s) OR 
+            WHERE ((g.home_team_id = %s AND g.away_team_id = %s) OR
                    (g.home_team_id = %s AND g.away_team_id = %s))
             AND g.status = 'completed'
             ORDER BY g.game_date DESC
             LIMIT %s
         '''
-        
-        cursor.execute(head_to_head_query, 
+
+        cursor.execute(head_to_head_query,
                       (team_id, team_id, team_id, opponent_id, opponent_id, team_id, last_n_games))
         head_to_head = cursor.fetchall()
-        
+
         # Get opponent's recent performance
         recent_performance_query = '''
-            SELECT 
+            SELECT
                 g.game_id,
                 g.game_date,
-                CASE 
-                    WHEN g.home_team_id = %s THEN g.home_score 
-                    ELSE g.away_score 
+                CASE
+                    WHEN g.home_team_id = %s THEN g.home_score
+                    ELSE g.away_score
                 END AS opponent_score,
-                CASE 
-                    WHEN g.home_team_id = %s THEN g.away_score 
-                    ELSE g.home_score 
+                CASE
+                    WHEN g.home_team_id = %s THEN g.away_score
+                    ELSE g.home_score
                 END AS other_team_score,
-                CASE 
-                    WHEN g.home_team_id = %s THEN at.name 
-                    ELSE ht.name 
+                CASE
+                    WHEN g.home_team_id = %s THEN at.name
+                    ELSE ht.name
                 END AS vs_team
             FROM Game g
             JOIN Teams ht ON g.home_team_id = ht.team_id
@@ -224,14 +224,14 @@ def get_opponent_reports():
             ORDER BY g.game_date DESC
             LIMIT %s
         '''
-        
-        cursor.execute(recent_performance_query, 
+
+        cursor.execute(recent_performance_query,
                       (opponent_id, opponent_id, opponent_id, opponent_id, opponent_id, last_n_games))
         recent_games = cursor.fetchall()
-        
+
         # Get opponent's key players
         key_players_query = '''
-            SELECT 
+            SELECT
                 p.player_id,
                 p.first_name,
                 p.last_name,
@@ -249,10 +249,10 @@ def get_opponent_reports():
             ORDER BY avg_points DESC
             LIMIT 5
         '''
-        
+
         cursor.execute(key_players_query, (opponent_id,))
         key_players = cursor.fetchall()
-        
+
         # Calculate performance statistics
         if recent_games:
             avg_points_scored = sum(g['opponent_score'] for g in recent_games) / len(recent_games)
@@ -261,7 +261,7 @@ def get_opponent_reports():
             win_percentage = (wins / len(recent_games)) * 100
         else:
             avg_points_scored = avg_points_allowed = win_percentage = 0
-        
+
         response_data = {
             'opponent_info': opponent_info,
             'head_to_head_history': head_to_head,
@@ -274,12 +274,12 @@ def get_opponent_reports():
             },
             'key_players': key_players
         }
-        
+
         current_app.logger.info(f'Successfully generated opponent report for team {opponent_id}')
         response = make_response(jsonify(response_data))
         response.status_code = 200
         return response
-        
+
     except Exception as e:
         current_app.logger.error(f'Error in get_opponent_reports: {str(e)}')
         return make_response(jsonify({"error": "Failed to fetch opponent report"}), 500)
@@ -291,49 +291,53 @@ def get_opponent_reports():
 def get_lineup_configurations():
     """
     Get lineup effectiveness analysis for strategic decision making.
-    
+
     Query parameters:
     - team_id: team ID (required)
     - min_games: minimum games played together (default: 5)
     - season: optional season filter
-    
+
     Returns:
         JSON: Lineup effectiveness data with performance metrics
     """
     try:
         current_app.logger.info('GET /lineup-configurations handler started')
-        
+
         # Extract and validate parameters
         team_id = request.args.get('team_id', type=int)
         min_games = request.args.get('min_games', 5, type=int)
         season = request.args.get('season')
-        
+
         if not team_id:
             return make_response(jsonify({"error": "team_id is required"}), 400)
-        
+
         cursor = db.get_db().cursor()
-        
-        # Get lineup configurations and their effectiveness
+
+        # FIX: Corrected query to ensure all players in a lineup belong to the selected team.
         lineup_query = '''
-            SELECT 
+            SELECT
                 lc.lineup_id,
-                GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) ORDER BY pl.position_in_lineup) AS lineup,
+                GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) ORDER BY pl.position_in_lineup SEPARATOR ', ') AS lineup,
                 lc.plus_minus,
                 lc.offensive_rating,
-                lc.defensive_rating,
-                COUNT(DISTINCT lc.quarter) AS quarters_played
+                lc.defensive_rating
             FROM LineupConfiguration lc
             JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
-            JOIN Players p ON p.player_id = pl.player_id
+            JOIN Players p ON pl.player_id = p.player_id
             WHERE lc.team_id = %s
             GROUP BY lc.lineup_id, lc.plus_minus, lc.offensive_rating, lc.defensive_rating
+            HAVING SUM(
+                CASE WHEN pl.player_id IN (
+                    SELECT player_id FROM TeamsPlayers WHERE team_id = %s AND left_date IS NULL
+                ) THEN 0 ELSE 1 END
+            ) = 0
             ORDER BY lc.plus_minus DESC
-            LIMIT 10
+            LIMIT 10;
         '''
-        
-        cursor.execute(lineup_query, [team_id])
+
+        cursor.execute(lineup_query, [team_id, team_id])
         lineup_stats = cursor.fetchall()
-        
+
         response_data = {
             'team_id': team_id,
             'lineup_effectiveness': lineup_stats,
@@ -342,12 +346,12 @@ def get_lineup_configurations():
                 'season': season
             }
         }
-        
+
         current_app.logger.info(f'Successfully retrieved lineup configurations for team {team_id}')
         response = make_response(jsonify(response_data))
         response.status_code = 200
         return response
-        
+
     except Exception as e:
         current_app.logger.error(f'Error in get_lineup_configurations: {str(e)}')
         return make_response(jsonify({"error": "Failed to fetch lineup configurations"}), 500)
@@ -359,79 +363,79 @@ def get_lineup_configurations():
 def get_season_summaries():
     """
     Get comprehensive season performance summaries for teams or players.
-    
+
     Query parameters:
     - entity_type: 'team' or 'player' (required)
     - entity_id: team_id or player_id (required)
     - season: specific season (optional, defaults to current)
-    
+
     Returns:
         JSON: Season summary with key performance indicators
     """
     try:
         current_app.logger.info('GET /season-summaries handler started')
-        
+
         # Extract and validate parameters
         entity_type = request.args.get('entity_type')
         entity_id = request.args.get('entity_id', type=int)
         season = request.args.get('season')
-        
+
         if not entity_type or not entity_id:
             return make_response(jsonify({
                 "error": "entity_type and entity_id are required"
             }), 400)
-        
+
         if entity_type not in ['team', 'player']:
             return make_response(jsonify({
                 "error": "entity_type must be 'team' or 'player'"
             }), 400)
-        
+
         cursor = db.get_db().cursor()
-        
+
         if entity_type == 'team':
             # Get comprehensive team season summary
             team_summary_query = '''
-                SELECT 
+                SELECT
                     t.name AS team_name,
                     COUNT(DISTINCT g.game_id) AS games_played,
-                    SUM(CASE 
-                        WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR 
-                             (g.away_team_id = %s AND g.away_score > g.home_score) THEN 1 
-                        ELSE 0 
+                    SUM(CASE
+                        WHEN (g.home_team_id = %s AND g.home_score > g.away_score) OR
+                             (g.away_team_id = %s AND g.away_score > g.home_score) THEN 1
+                        ELSE 0
                     END) AS wins,
-                    SUM(CASE 
-                        WHEN (g.home_team_id = %s AND g.home_score < g.away_score) OR 
-                             (g.away_team_id = %s AND g.away_score < g.home_score) THEN 1 
-                        ELSE 0 
+                    SUM(CASE
+                        WHEN (g.home_team_id = %s AND g.home_score < g.away_score) OR
+                             (g.away_team_id = %s AND g.away_score < g.home_score) THEN 1
+                        ELSE 0
                     END) AS losses,
-                    ROUND(AVG(CASE 
-                        WHEN g.home_team_id = %s THEN g.home_score 
-                        ELSE g.away_score 
+                    ROUND(AVG(CASE
+                        WHEN g.home_team_id = %s THEN g.home_score
+                        ELSE g.away_score
                     END), 1) AS avg_points_scored,
-                    ROUND(AVG(CASE 
-                        WHEN g.home_team_id = %s THEN g.away_score 
-                        ELSE g.home_score 
+                    ROUND(AVG(CASE
+                        WHEN g.home_team_id = %s THEN g.away_score
+                        ELSE g.home_score
                     END), 1) AS avg_points_allowed
                 FROM Teams t
                 JOIN Game g ON (g.home_team_id = t.team_id OR g.away_team_id = t.team_id)
                 WHERE t.team_id = %s AND g.status = 'completed'
             '''
-            
+
             params = [entity_id] * 7
-            
+
             if season:
                 team_summary_query += ' AND g.season = %s'
                 params.append(season)
-            
+
             team_summary_query += ' GROUP BY t.name'
-            
+
             cursor.execute(team_summary_query, params)
             summary = cursor.fetchone()
-            
+
         else:  # entity_type == 'player'
             # Get comprehensive player season summary
             player_summary_query = '''
-                SELECT 
+                SELECT
                     p.first_name,
                     p.last_name,
                     p.position,
@@ -454,30 +458,30 @@ def get_season_summaries():
                 LEFT JOIN Game g ON pgs.game_id = g.game_id
                 WHERE p.player_id = %s
             '''
-            
+
             params = [entity_id]
-            
+
             if season:
                 player_summary_query += ' AND g.season = %s'
                 params.append(season)
-            
+
             player_summary_query += ' GROUP BY p.player_id, p.first_name, p.last_name, p.position, t.name'
-            
+
             cursor.execute(player_summary_query, params)
             summary = cursor.fetchone()
-        
+
         response_data = {
             'entity_type': entity_type,
             'entity_id': entity_id,
             'season': season if season else 'current',
             'summary': summary
         }
-        
+
         current_app.logger.info(f'Successfully generated season summary for {entity_type} {entity_id}')
         response = make_response(jsonify(response_data))
         response.status_code = 200
         return response
-        
+
     except Exception as e:
         current_app.logger.error(f'Error in get_season_summaries: {str(e)}')
         return make_response(jsonify({"error": "Failed to fetch season summary"}), 500)
