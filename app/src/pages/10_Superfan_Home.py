@@ -12,12 +12,12 @@ st.write('')
 st.write('')
 st.write('### What would you like to do today?')
 
-if st.button('Game Stats',
+if st.button('Player Comparison',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/11_Player_Stats.py')
+    st.switch_page('pages/12_Player_Comparison.py')
 
 if st.button('Player Stats',
              type='primary',
              use_container_width=True):
-    st.switch_page('pages/11_Player_Stats.py')
+    st.switch_page('pages/11_Player_Finder.py')
