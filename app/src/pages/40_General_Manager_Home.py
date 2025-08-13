@@ -17,12 +17,12 @@ if st.button('Track Player Progress',
              use_container_width=True):
     st.switch_page('pages/41_Player_Progress.py')
 
-if st.button('Update Draft Rankings',
+if st.button('Updated Draft Rankings',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/42_Draft_Rankings.py')
 
-if st.button('Analyze Contract Efficiency',
+if st.button('Free Agent Simulation',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/43_Contract_Efficiency.py')

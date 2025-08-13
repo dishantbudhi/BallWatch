@@ -19,132 +19,75 @@ SideBarLinks()
 if 'api_base_url' not in st.session_state:
     st.session_state.api_base_url = 'http://api:4000/api'
 
+# Add debug mode toggle to session state
+if 'debug_mode' not in st.session_state:
+    st.session_state.debug_mode = False
+
 # API Helper Functions
 def api_get(endpoint):
     full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        st.write("---")
-        st.write("🔍 **DEBUG: GET REQUEST DETAILS**")
-        st.write(f"**Full URL:** `{full_url}`")
-        st.write(f"**Base URL:** `{st.session_state.api_base_url}`")
-        st.write(f"**Endpoint:** `{endpoint}`")
-        st.write(f"**Method:** GET")
-        st.write(f"**Timeout:** 10 seconds")
-        st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Only show debug info if debug mode is enabled
+        if st.session_state.debug_mode:
+            with st.expander("🔍 Debug Info", expanded=False):
+                st.write(f"**GET Request:** `{full_url}`")
+                st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         response = requests.get(full_url, timeout=10)
-        
-        st.write("📡 **RESPONSE DETAILS**")
-        st.write(f"**Status Code:** {response.status_code}")
-        st.write(f"**Status Text:** {response.reason}")
-        st.write(f"**Response Headers:** {dict(response.headers)}")
-        st.write(f"**Content Type:** {response.headers.get('Content-Type', 'Unknown')}")
-        st.write(f"**Content Length:** {len(response.content)} bytes")
         
         if response.status_code == 200:
             try:
                 json_data = response.json()
-                st.success(f"✅ **SUCCESS:** API call completed successfully")
-                st.write(f"**Response JSON Keys:** {list(json_data.keys()) if isinstance(json_data, dict) else 'Not a dictionary'}")
                 return json_data
-            except ValueError as json_error:
-                st.error(f"❌ **JSON PARSE ERROR:** Response is not valid JSON")
-                st.error(f"**JSON Error:** {str(json_error)}")
-                st.error(f"**Raw Response:** {response.text[:1000]}")
+            except ValueError:
+                logger.error(f"Invalid JSON response from {endpoint}")
                 return None
         else:
-            st.error(f"❌ **HTTP ERROR:** Server returned error status")
-            st.error(f"**Status Code:** {response.status_code}")
-            st.error(f"**Status Message:** {response.reason}")
-            st.error(f"**Response Body:** {response.text[:1000]}")
+            # Log the error but don't show verbose details to user
+            logger.error(f"API Error {response.status_code} for {endpoint}: {response.text[:200]}")
             
-            # Specific error code explanations
+            # Show user-friendly error messages
             if response.status_code == 404:
-                st.error("🔍 **404 NOT FOUND:** The endpoint does not exist on the server")
-                st.info("**Possible causes:** Wrong URL path, endpoint not implemented, typo in route")
+                st.error(f"Endpoint not found: {endpoint}")
             elif response.status_code == 500:
-                st.error("💥 **500 INTERNAL SERVER ERROR:** Server encountered an error")
-                st.info("**Possible causes:** Database error, unhandled exception in backend code")
+                # Try to parse error message from response
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('error', 'Server error occurred')
+                    st.error(f"Server Error: {error_msg}")
+                except:
+                    st.error("Server error occurred. Please try again later.")
             elif response.status_code == 403:
-                st.error("🚫 **403 FORBIDDEN:** Access denied")
-                st.info("**Possible causes:** Authentication required, insufficient permissions")
+                st.error("Access denied. Please check your permissions.")
             elif response.status_code == 400:
-                st.error("📝 **400 BAD REQUEST:** Invalid request format")
-                st.info("**Possible causes:** Missing parameters, invalid JSON, wrong data format")
+                st.error("Invalid request. Please check your input.")
             
             return None
             
-    except requests.exceptions.ConnectionError as e:
-        st.error("🔌 **CONNECTION ERROR:** Cannot establish connection to server")
-        st.error(f"**Error Type:** ConnectionError")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        
-        st.info("🔧 **TROUBLESHOOTING STEPS:**")
-        st.info("1. Check if the API server is running")
-        st.info("2. Verify the server is listening on port 4000")
-        st.info("3. Test with: `curl http://api:4000/api/system-health`")
-        st.info("4. Check Docker container networking")
-        st.info("5. Verify API service name 'api' is correct in Docker")
-        st.info("6. Check firewall/network security groups")
-        
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error for {endpoint}")
+        st.error("Cannot connect to server. Please check if the API is running.")
         return None
         
-    except requests.exceptions.Timeout as e:
-        st.error("⏰ **TIMEOUT ERROR:** Request took longer than 10 seconds")
-        st.error(f"**Error Type:** Timeout")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        
-        st.info("🔧 **TROUBLESHOOTING STEPS:**")
-        st.info("1. Server might be overloaded or slow")
-        st.info("2. Database queries might be taking too long")
-        st.info("3. Network latency issues")
-        st.info("4. Try again in a few seconds")
-        
-        return None
-        
-    except requests.exceptions.HTTPError as e:
-        st.error("📡 **HTTP ERROR:** Invalid HTTP response")
-        st.error(f"**Error Type:** HTTPError")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        return None
-        
-    except requests.exceptions.RequestException as e:
-        st.error("🌐 **REQUEST ERROR:** Generic request failure")
-        st.error(f"**Error Type:** {type(e).__name__}")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout error for {endpoint}")
+        st.error("Request timed out. Please try again.")
         return None
         
     except Exception as e:
-        st.error("💥 **UNEXPECTED ERROR:** Unknown error occurred")
-        st.error(f"**Error Type:** {type(e).__name__}")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Python Exception:** {e.__class__.__module__}.{e.__class__.__name__}")
-        
-        import traceback
-        st.error("**Full Traceback:**")
-        st.code(traceback.format_exc())
-        
+        logger.error(f"Unexpected error for {endpoint}: {str(e)}")
+        st.error("An unexpected error occurred. Please try again.")
         return None
 
 def api_post(endpoint, data):
     full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        st.write("---")
-        st.write("🔍 **DEBUG: POST REQUEST DETAILS**")
-        st.write(f"**Full URL:** `{full_url}`")
-        st.write(f"**Base URL:** `{st.session_state.api_base_url}`")
-        st.write(f"**Endpoint:** `{endpoint}`")
-        st.write(f"**Method:** POST")
-        st.write(f"**Content-Type:** application/json")
-        st.write(f"**Timeout:** 10 seconds")
-        st.write(f"**Payload Size:** {len(str(data))} characters")
-        st.write(f"**Payload:** {data}")
-        st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Only show debug info if debug mode is enabled
+        if st.session_state.debug_mode:
+            with st.expander("🔍 Debug Info", expanded=False):
+                st.write(f"**POST Request:** `{full_url}`")
+                st.write(f"**Payload:** {data}")
+                st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         response = requests.post(
             full_url,
@@ -153,106 +96,53 @@ def api_post(endpoint, data):
             timeout=10
         )
         
-        st.write("📡 **RESPONSE DETAILS**")
-        st.write(f"**Status Code:** {response.status_code}")
-        st.write(f"**Status Text:** {response.reason}")
-        st.write(f"**Response Headers:** {dict(response.headers)}")
-        st.write(f"**Content Type:** {response.headers.get('Content-Type', 'Unknown')}")
-        st.write(f"**Content Length:** {len(response.content)} bytes")
-        
         if response.status_code in [200, 201]:
             try:
                 json_data = response.json()
-                st.success(f"✅ **SUCCESS:** POST request completed successfully")
-                st.write(f"**Response JSON Keys:** {list(json_data.keys()) if isinstance(json_data, dict) else 'Not a dictionary'}")
                 return json_data
-            except ValueError as json_error:
-                st.error(f"❌ **JSON PARSE ERROR:** Response is not valid JSON")
-                st.error(f"**JSON Error:** {str(json_error)}")
-                st.error(f"**Raw Response:** {response.text[:1000]}")
+            except ValueError:
+                logger.error(f"Invalid JSON response from {endpoint}")
                 return None
         else:
-            st.error(f"❌ **HTTP ERROR:** Server returned error status")
-            st.error(f"**Status Code:** {response.status_code}")
-            st.error(f"**Status Message:** {response.reason}")
-            st.error(f"**Response Body:** {response.text[:1000]}")
+            # Log the error but don't show verbose details to user
+            logger.error(f"API Error {response.status_code} for {endpoint}: {response.text[:200]}")
             
-            # Specific error code explanations
+            # Show user-friendly error messages
             if response.status_code == 404:
-                st.error("🔍 **404 NOT FOUND:** The endpoint does not exist on the server")
-                st.info("**Possible causes:** Wrong URL path, endpoint not implemented, typo in route")
+                st.error(f"Endpoint not found: {endpoint}")
             elif response.status_code == 500:
-                st.error("💥 **500 INTERNAL SERVER ERROR:** Server encountered an error")
-                st.info("**Possible causes:** Database error, unhandled exception in backend code, invalid data format")
+                st.error("Server error occurred. Please check the backend logs.")
             elif response.status_code == 400:
-                st.error("📝 **400 BAD REQUEST:** Invalid request format or data")
-                st.info("**Possible causes:** Missing required fields, invalid JSON structure, wrong data types")
-                st.info(f"**Expected fields for {endpoint}:** Check your admin_routes.py for required fields")
+                st.error("Invalid request data. Please check your input.")
             elif response.status_code == 409:
-                st.error("⚠️ **409 CONFLICT:** Resource conflict")
-                st.info("**Possible causes:** Duplicate data, resource already exists, concurrent access issue")
+                st.error("A data load of this type is already running.")
             
             return None
             
-    except requests.exceptions.ConnectionError as e:
-        st.error("🔌 **CONNECTION ERROR:** Cannot establish connection to server")
-        st.error(f"**Error Type:** ConnectionError")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Request Data:** {data}")
-        
-        st.info("🔧 **TROUBLESHOOTING STEPS:**")
-        st.info("1. Check if the API server is running")
-        st.info("2. Verify the server is listening on port 4000")
-        st.info("3. Test with: `curl -X POST -H 'Content-Type: application/json' -d '{}' http://api:4000/api/data-loads`")
-        st.info("4. Check Docker container networking")
-        st.info("5. Verify API service name 'api' is correct")
-        
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error for {endpoint}")
+        st.error("Cannot connect to server. Please check if the API is running.")
         return None
         
-    except requests.exceptions.Timeout as e:
-        st.error("⏰ **TIMEOUT ERROR:** Request took longer than 10 seconds")
-        st.error(f"**Error Type:** Timeout")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Request Data:** {data}")
-        return None
-        
-    except requests.exceptions.RequestException as e:
-        st.error("🌐 **REQUEST ERROR:** Generic request failure")
-        st.error(f"**Error Type:** {type(e).__name__}")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Request Data:** {data}")
+    except requests.exceptions.Timeout:
+        logger.error(f"Timeout error for {endpoint}")
+        st.error("Request timed out. Please try again.")
         return None
         
     except Exception as e:
-        st.error("💥 **UNEXPECTED ERROR:** Unknown error occurred")
-        st.error(f"**Error Type:** {type(e).__name__}")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Request Data:** {data}")
-        
-        import traceback
-        st.error("**Full Traceback:**")
-        st.code(traceback.format_exc())
-        
+        logger.error(f"Unexpected error for {endpoint}: {str(e)}")
+        st.error("An unexpected error occurred. Please try again.")
         return None
 
 def api_put(endpoint, data):
     full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        st.write("---")
-        st.write("🔍 **DEBUG: PUT REQUEST DETAILS**")
-        st.write(f"**Full URL:** `{full_url}`")
-        st.write(f"**Base URL:** `{st.session_state.api_base_url}`")
-        st.write(f"**Endpoint:** `{endpoint}`")
-        st.write(f"**Method:** PUT")
-        st.write(f"**Content-Type:** application/json")
-        st.write(f"**Timeout:** 10 seconds")
-        st.write(f"**Payload Size:** {len(str(data))} characters")
-        st.write(f"**Payload:** {data}")
-        st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        # Only show debug info if debug mode is enabled
+        if st.session_state.debug_mode:
+            with st.expander("🔍 Debug Info", expanded=False):
+                st.write(f"**PUT Request:** `{full_url}`")
+                st.write(f"**Payload:** {data}")
+                st.write(f"**Timestamp:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         response = requests.put(
             full_url,
@@ -261,67 +151,47 @@ def api_put(endpoint, data):
             timeout=10
         )
         
-        st.write("📡 **RESPONSE DETAILS**")
-        st.write(f"**Status Code:** {response.status_code}")
-        st.write(f"**Status Text:** {response.reason}")
-        st.write(f"**Response Headers:** {dict(response.headers)}")
-        st.write(f"**Content Type:** {response.headers.get('Content-Type', 'Unknown')}")
-        st.write(f"**Content Length:** {len(response.content)} bytes")
-        
         if response.status_code == 200:
             try:
                 json_data = response.json()
-                st.success(f"✅ **SUCCESS:** PUT request completed successfully")
-                st.write(f"**Response JSON Keys:** {list(json_data.keys()) if isinstance(json_data, dict) else 'Not a dictionary'}")
                 return json_data
-            except ValueError as json_error:
-                st.error(f"❌ **JSON PARSE ERROR:** Response is not valid JSON")
-                st.error(f"**JSON Error:** {str(json_error)}")
-                st.error(f"**Raw Response:** {response.text[:1000]}")
+            except ValueError:
+                logger.error(f"Invalid JSON response from {endpoint}")
                 return None
         else:
-            st.error(f"❌ **HTTP ERROR:** Server returned error status")
-            st.error(f"**Status Code:** {response.status_code}")
-            st.error(f"**Status Message:** {response.reason}")
-            st.error(f"**Response Body:** {response.text[:1000]}")
+            # Log the error but don't show verbose details to user
+            logger.error(f"API Error {response.status_code} for {endpoint}: {response.text[:200]}")
             
-            # Specific error code explanations
+            # Show user-friendly error messages
             if response.status_code == 404:
-                st.error("🔍 **404 NOT FOUND:** The resource does not exist")
-                st.info("**Possible causes:** Invalid load ID, resource was deleted, wrong endpoint")
+                st.error("Resource not found.")
             elif response.status_code == 500:
-                st.error("💥 **500 INTERNAL SERVER ERROR:** Server encountered an error")
-                st.info("**Possible causes:** Database error, invalid update data, constraint violations")
+                st.error("Server error occurred. Please try again.")
             elif response.status_code == 400:
-                st.error("📝 **400 BAD REQUEST:** Invalid update data")
-                st.info("**Possible causes:** Missing fields, invalid status values, wrong data types")
+                st.error("Invalid update data.")
             
             return None
             
-    except requests.exceptions.ConnectionError as e:
-        st.error("🔌 **CONNECTION ERROR:** Cannot establish connection to server")
-        st.error(f"**Error Type:** ConnectionError")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Request Data:** {data}")
+    except requests.exceptions.ConnectionError:
+        logger.error(f"Connection error for {endpoint}")
+        st.error("Cannot connect to server.")
         return None
         
     except Exception as e:
-        st.error("💥 **UNEXPECTED ERROR:** Unknown error occurred during PUT")
-        st.error(f"**Error Type:** {type(e).__name__}")
-        st.error(f"**Error Details:** {str(e)}")
-        st.error(f"**Target URL:** {full_url}")
-        st.error(f"**Request Data:** {data}")
-        
-        import traceback
-        st.error("**Full Traceback:**")
-        st.code(traceback.format_exc())
-        
+        logger.error(f"Unexpected error for {endpoint}: {str(e)}")
+        st.error("An unexpected error occurred.")
         return None
 
 # Main Page
 st.title("Data Pipelines")
 st.markdown("Manage and monitor data loads for BallWatch")
+
+# Add debug mode toggle in sidebar
+with st.sidebar:
+    st.divider()
+    st.session_state.debug_mode = st.checkbox("🐛 Debug Mode", value=st.session_state.debug_mode)
+    if st.session_state.debug_mode:
+        st.info("Debug mode enabled - verbose error details will be shown")
 
 # Quick Actions Section
 st.subheader("Start New Data Load")
@@ -337,8 +207,6 @@ with col1:
             if result:
                 st.success(f"Load started successfully! Load ID: {result.get('load_id')}")
                 st.rerun()
-            else:
-                st.error("Failed to start load")
 
 with col2:
     if st.button("Load Game Data", type="primary", use_container_width=True):
@@ -350,8 +218,6 @@ with col2:
             if result:
                 st.success(f"Load started successfully! Load ID: {result.get('load_id')}")
                 st.rerun()
-            else:
-                st.error("Failed to start load")
 
 with col3:
     if st.button("Load Team Data", type="primary", use_container_width=True):
@@ -363,8 +229,6 @@ with col3:
             if result:
                 st.success(f"Load started successfully! Load ID: {result.get('load_id')}")
                 st.rerun()
-            else:
-                st.error("Failed to start load")
 
 st.divider()
 
@@ -383,8 +247,9 @@ with col4:
     if st.button("Refresh", use_container_width=True):
         st.rerun()
 
-# Fetch data loads (using backend's default 30-day filter)
-loads_data = api_get('/data-loads')
+# Fetch data loads
+with st.spinner("Loading data..."):
+    loads_data = api_get('/data-loads')
 
 if loads_data:
     loads = loads_data.get('loads', [])
@@ -392,10 +257,13 @@ if loads_data:
     if loads:
         df = pd.DataFrame(loads)
         
-        # Apply search filter
+        # Apply filters
         if search_term:
             mask = df.apply(lambda x: search_term.lower() in str(x).lower(), axis=1)
             df = df[mask]
+        
+        if status_filter != "All":
+            df = df[df['status'] == status_filter]
         
         if not df.empty:
             # Add status indicators
@@ -474,11 +342,42 @@ if loads_data:
         else:
             st.info("No loads found matching your criteria")
     else:
-        st.info("No data loads found")
+        st.info("No data loads found. Start a new load using the buttons above.")
 else:
-    st.warning("Unable to connect to API. Using mock data for demonstration.")
+    # Show a simple warning without all the debug details
+    st.warning("⚠️ Unable to connect to the API server")
     
-    # Fallback mock data
+    # Add a helpful expander with troubleshooting steps
+    with st.expander("Troubleshooting Steps"):
+        st.markdown("""
+        1. **Check if the API server is running**
+           - For Docker: `docker-compose ps`
+           - For local: Check the terminal running Flask
+        
+        2. **Verify the DataLoads table exists**
+           ```sql
+           CREATE TABLE IF NOT EXISTS DataLoads (
+               load_id INT AUTO_INCREMENT PRIMARY KEY,
+               load_type VARCHAR(50) NOT NULL,
+               status ENUM('pending', 'running', 'completed', 'failed') DEFAULT 'pending',
+               started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+               completed_at TIMESTAMP NULL,
+               records_processed INT DEFAULT 0,
+               records_failed INT DEFAULT 0,
+               error_message TEXT,
+               source_file VARCHAR(255),
+               initiated_by VARCHAR(100)
+           );
+           ```
+        
+        3. **Check Flask logs for errors**
+           - Docker: `docker-compose logs api`
+           - Local: Check Flask terminal output
+        """)
+    
+    # Show demo data
+    st.info("Showing demo data for visualization purposes")
+    
     mock_data = [
         {
             'load_id': 1,
@@ -518,7 +417,9 @@ st.divider()
 
 # System Health Check
 st.subheader("System Health Status")
-health_data = api_get('/system-health')
+
+with st.spinner("Checking system health..."):
+    health_data = api_get('/system-health')
 
 if health_data:
     col1, col2, col3, col4 = st.columns(4)
@@ -541,4 +442,12 @@ if health_data:
         active_loads = health_data.get('active_data_loads', 0)
         st.metric("Active Loads", active_loads)
 else:
-    st.info("System health data unavailable")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("System Status", "🔴 OFFLINE")
+    with col2:
+        st.metric("Database", "⚠️ UNKNOWN")
+    with col3:
+        st.metric("Errors (24h)", "N/A")
+    with col4:
+        st.metric("Active Loads", "N/A")
