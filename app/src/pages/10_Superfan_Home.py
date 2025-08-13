@@ -21,3 +21,8 @@ if st.button('Player Stats',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/11_Player_Finder.py')
+
+if st.button('Game Analysis',
+             type='primary',
+             use_container_width=True):
+    st.switch_page('pages/13_Historical_Game_Results.py')
