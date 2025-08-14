@@ -21,6 +21,14 @@ st.caption("Compare two players side-by-side, view historical results, and analy
 BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
 
 # ------------------------------------------------------------------------------------
+# Session defaults
+# ------------------------------------------------------------------------------------
+if "compare" not in st.session_state:
+    st.session_state.compare = False  # sticky compare mode
+if "last_filters" not in st.session_state:
+    st.session_state.last_filters = {}
+
+# ------------------------------------------------------------------------------------
 # API helpers
 # ------------------------------------------------------------------------------------
 def api_get(path: str, params: dict | None = None):
@@ -36,11 +44,9 @@ def api_get(path: str, params: dict | None = None):
 
 @st.cache_data(ttl=300)
 def fetch_teams_df() -> pd.DataFrame:
-    """Load all teams once for name→id resolution and UI help."""
     resp = api_get("/basketball/teams")
     teams = resp.get("teams", []) if isinstance(resp, dict) else (resp or [])
     df = pd.DataFrame(teams)
-    # normalize columns we use
     for col in ["team_id", "name", "city", "conference", "division"]:
         if col not in df.columns:
             df[col] = None
@@ -48,10 +54,6 @@ def fetch_teams_df() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def resolve_team_ids_by_name(name_query: str) -> list[int]:
-    """
-    Case-insensitive match on team name.
-    Tries exact first, then 'contains'. Returns a list of team_ids.
-    """
     if not name_query:
         return []
     df = fetch_teams_df()
@@ -65,11 +67,6 @@ def resolve_team_ids_by_name(name_query: str) -> list[int]:
 
 @st.cache_data(ttl=180)
 def load_all_players(position: str | None = None, team_name: str | None = None) -> pd.DataFrame:
-    """
-    Load players with optional position and *team name* filter.
-    - Preferred: resolve team name -> team_id(s) and call /basketball/players?team_id=...
-    - Fallback: fetch once then client-filter by current_team (contains).
-    """
     base_params = {}
     if position:
         base_params["position"] = position
@@ -85,13 +82,11 @@ def load_all_players(position: str | None = None, team_name: str | None = None) 
                 part = data.get("players", []) if isinstance(data, dict) else (data or [])
                 rows.extend(part)
             if rows:
-                # de-dup by player_id
                 rows = list({r.get("player_id"): r for r in rows if r.get("player_id") is not None}.values())
                 df = pd.DataFrame(rows)
             else:
                 df = pd.DataFrame()
         else:
-            # Fallback to client-side filter
             data = api_get("/basketball/players", base_params)
             rows = data.get("players", []) if isinstance(data, dict) else (data or [])
             df = pd.DataFrame(rows)
@@ -103,7 +98,6 @@ def load_all_players(position: str | None = None, team_name: str | None = None) 
         rows = data.get("players", []) if isinstance(data, dict) else (data or [])
         df = pd.DataFrame(rows)
 
-    # Build a friendly display label for pickers
     if not df.empty:
         if "position" not in df.columns:
             df["position"] = ""
@@ -116,23 +110,13 @@ def load_all_players(position: str | None = None, team_name: str | None = None) 
 
 @st.cache_data(ttl=180)
 def fetch_player_stats(player_id: int):
-    """
-    Pull stats with NO season/game_type filters (all data).
-    Supports both {stats: {...}} and {player_stats: {...}} response shapes.
-    Returns (stats_dict, recent_games_df)
-    """
     resp = api_get(f"/basketball/players/{player_id}/stats")
     if not resp:
         return {}, pd.DataFrame()
-
     stats = resp.get("stats") or resp.get("player_stats") or {}
-    recent_key = "recent_games"
-    recent = pd.DataFrame(resp.get(recent_key, []) or [])
-
-    # normalize recent games columns (just in case)
+    recent = pd.DataFrame(resp.get("recent_games", []) or [])
     if "game_date" not in recent.columns and "date" in recent.columns:
         recent = recent.rename(columns={"date": "game_date"})
-
     return stats, recent
 
 # ------------------------------------------------------------------------------------
@@ -145,14 +129,21 @@ with fcol1:
     position_filter = st.selectbox(
         "Position Filter (optional)",
         ["", "Guard", "Forward", "Center"],
-        index=0
+        index=0,
+        key="pos_filter"
     ) or None
 with fcol2:
-    team_name_filter = st.text_input("Team Name Filter (optional)", value="")
+    team_name_filter = st.text_input("Team Name Filter (optional)", value="", key="team_filter")
 
 st.markdown("")
 
-# Load player list with optional filters for easier searching
+# Detect filter changes to optionally reset comparison (keeps UX sane)
+current_filters = {"position": position_filter, "team": (team_name_filter or "").strip()}
+if current_filters != st.session_state.last_filters:
+    st.session_state.last_filters = current_filters
+    # Optional: uncomment to clear comparison when the universe of players changes
+    # st.session_state.compare = False
+
 players_df = load_all_players(position=position_filter, team_name=team_name_filter.strip() or None)
 if players_df.empty:
     st.warning("No players available. Adjust filters or load data.")
@@ -163,20 +154,20 @@ if players_df.empty:
 # ------------------------------------------------------------------------------------
 scol1, scol2 = st.columns(2)
 with scol1:
-    search1 = st.text_input("Search Player 1 by name", value="")
+    search1 = st.text_input("Search Player 1 by name", value="", key="search_p1")
     df1 = players_df.copy()
     if search1.strip():
-        mask = df1["display"].str.contains(search1.strip(), case=False, na=False)
-        df1 = df1[mask]
-    player1 = st.selectbox("Select Player 1", options=df1["display"].tolist(), index=0 if not df1.empty else None)
+        df1 = df1[df1["display"].str.contains(search1.strip(), case=False, na=False)]
+    player1 = st.selectbox("Select Player 1", options=df1["display"].tolist(),
+                           index=0 if not df1.empty else None, key="select_p1")
 with scol2:
-    search2 = st.text_input("Search Player 2 by name", value="")
+    search2 = st.text_input("Search Player 2 by name", value="", key="search_p2")
     df2 = players_df.copy()
     if search2.strip():
-        mask = df2["display"].str.contains(search2.strip(), case=False, na=False)
-        df2 = df2[mask]
+        df2 = df2[df2["display"].str.contains(search2.strip(), case=False, na=False)]
     default_idx = 1 if len(df2) > 1 else 0
-    player2 = st.selectbox("Select Player 2", options=df2["display"].tolist(), index=default_idx if not df2.empty else None)
+    player2 = st.selectbox("Select Player 2", options=df2["display"].tolist(),
+                           index=default_idx if not df2.empty else None, key="select_p2")
 
 def pick_id(df, display):
     if df.empty or not display:
@@ -187,18 +178,19 @@ def pick_id(df, display):
 p1_id = pick_id(players_df, player1)
 p2_id = pick_id(players_df, player2)
 
-run = st.button("Compare Players", type="primary")
+# Make the compare button sticky across reruns
+if st.button("Compare Players", type="primary", key="compare_btn"):
+    st.session_state.compare = True
+
 st.markdown("---")
 
 # ------------------------------------------------------------------------------------
 # Comparison
 # ------------------------------------------------------------------------------------
-if run and p1_id and p2_id:
-    # Pull stats + recent games (box scores) with NO season/game_type filters
+if st.session_state.compare and p1_id and p2_id:
     p1_stats, p1_recent = fetch_player_stats(p1_id)
     p2_stats, p2_recent = fetch_player_stats(p2_id)
 
-    # Basic info cards
     c1, c2 = st.columns(2)
 
     def name_for(pid):
@@ -241,7 +233,6 @@ if run and p1_id and p2_id:
 
     st.markdown("---")
 
-    # Radar chart comparison
     radar_cols = [
         "avg_points", "avg_rebounds", "avg_assists",
         "avg_steals", "avg_blocks", "avg_turnovers",
@@ -254,17 +245,13 @@ if run and p1_id and p2_id:
     rfig = go.Figure()
     rfig.add_trace(go.Scatterpolar(r=p1_vals, theta=radar_cols, fill='toself', name=display_names[0]))
     rfig.add_trace(go.Scatterpolar(r=p2_vals, theta=radar_cols, fill='toself', name=display_names[1]))
-    rfig.update_layout(
-        polar=dict(radialaxis=dict(visible=True)),
-        title="Averages Radar"
-    )
+    rfig.update_layout(polar=dict(radialaxis=dict(visible=True)), title="Averages Radar")
     st.plotly_chart(rfig, use_container_width=True)
 
-    # Historical results / box scores (recent games)
     st.subheader("Recent Box Scores (Historical Games)")
-    ng = st.slider("Number of Recent Games to Show", 5, 25, 10, 5)
+    # This slider caused reruns that hid results before—now compare state is sticky
+    ng = st.slider("Number of Recent Games to Show", 5, 25, 10, 5, key="recent_games_n")
 
-    # Normalize/ensure columns for plotting
     for df_recent in (p1_recent, p2_recent):
         if not df_recent.empty:
             if "points" not in df_recent.columns and "PTS" in df_recent.columns:
@@ -274,20 +261,16 @@ if run and p1_id and p2_id:
             if "assists" not in df_recent.columns and "AST" in df_recent.columns:
                 df_recent.rename(columns={"AST": "assists"}, inplace=True)
 
-    # Line chart of points over time
     if not p1_recent.empty or not p2_recent.empty:
         lp1 = p1_recent.head(ng).copy()
         lp2 = p2_recent.head(ng).copy()
         lp1["player"] = display_names[0]
         lp2["player"] = display_names[1]
         chart_parts = []
-        if not lp1.empty:
-            chart_parts.append(lp1)
-        if not lp2.empty:
-            chart_parts.append(lp2)
+        if not lp1.empty: chart_parts.append(lp1)
+        if not lp2.empty: chart_parts.append(lp2)
         if chart_parts:
             combined = pd.concat(chart_parts, ignore_index=True)
-            # Use game_date or fallback to index
             if "game_date" in combined.columns:
                 combined["game_date"] = pd.to_datetime(combined["game_date"], errors="coerce")
                 x = "game_date"
@@ -298,7 +281,6 @@ if run and p1_id and p2_id:
                 lfig = px.line(combined, x=x, y="points", color="player", markers=True, title="Points in Recent Games")
                 st.plotly_chart(lfig, use_container_width=True)
 
-    # Side-by-side tables
     t1, t2 = st.columns(2)
     with t1:
         st.markdown(f"**{display_names[0]} — Recent Games (Top {ng})**")
@@ -317,6 +299,6 @@ with st.expander("Debug Info"):
         "players_path": "/basketball/players",
         "stats_path": "/basketball/players/<id>/stats",
         "teams_path": "/basketball/teams",
-        "position_filter": position_filter,
-        "team_name_filter": team_name_filter,
+        "compare_state": st.session_state.compare,
+        "filters": st.session_state.last_filters,
     })

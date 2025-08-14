@@ -19,6 +19,12 @@ st.title("🔎 Player Finder (Superfan)")
 # If you run Streamlit on your host, set API_BASE_URL=http://localhost:4000
 BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
 
+# ---------------- Session Defaults (to keep results sticky across reruns) -------------
+if "search_active" not in st.session_state:
+    st.session_state.search_active = False
+if "last_filters_pf" not in st.session_state:
+    st.session_state.last_filters_pf = {}
+
 # ---------- Utilities ----------
 def api_get(path: str, params: dict | None = None):
     try:
@@ -84,22 +90,22 @@ def load_players(position=None, team_name=None, min_age=None, max_age=None, min_
     return pd.DataFrame(rows)
 
 @st.cache_data(ttl=120)
-def fetch_player_season_stat(player_id: int, season: str | None):
-    params = {}
-    if season:
-        params["season"] = season
-    # NOTE: Depending on your route, it may return {player_stats: {...}} or {stats: {...}}
-    resp = api_get(f"/basketball/players/{player_id}/stats", params)
+def fetch_player_stats(player_id: int):
+    """
+    Fetch per-player stats WITHOUT season/game type filters.
+    Supports both {player_stats: {...}} and {stats: {...}} response shapes.
+    """
+    resp = api_get(f"/basketball/players/{player_id}/stats")
     if not resp:
         return {}
-    # try both keys for compatibility
+    # Try both keys for compatibility
     if "stats" in resp and resp["stats"] is not None:
         return resp["stats"]
     if "player_stats" in resp and resp["player_stats"] is not None:
         return resp["player_stats"]
     return {}
 
-def enrich_with_stats(df_players: pd.DataFrame, season: str | None, max_players: int = 50):
+def enrich_with_stats(df_players: pd.DataFrame, max_players: int = 50):
     """For performance, cap the number of stat fetches."""
     if df_players.empty:
         return df_players
@@ -107,7 +113,7 @@ def enrich_with_stats(df_players: pd.DataFrame, season: str | None, max_players:
     rows = []
     limit = min(len(df_players), max_players)
     for _, row in df_players.head(limit).iterrows():
-        stats = fetch_player_season_stat(int(row["player_id"]), season)
+        stats = fetch_player_stats(int(row["player_id"]))
         merged = {**row.to_dict(), **(stats or {})}
         rows.append(merged)
     # If there are more players than max_players, keep the remaining without stats.
@@ -125,29 +131,28 @@ with col1:
         "Position",
         options=["", "Guard", "Forward", "Center"],
         index=0,
-        help="Filter by the player's listed position."
+        help="Filter by the player's listed position.",
+        key="pf_position"
     )
 with col2:
-    team_name = st.text_input("Team Name (optional)", value="", help="Type a team name (partial match allowed).")
+    team_name = st.text_input("Team Name (optional)", value="", help="Type a team name (partial match allowed).", key="pf_teamname")
 with col3:
-    min_age = st.number_input("Min Age", min_value=0, max_value=60, value=0, step=1)
+    min_age = st.number_input("Min Age", min_value=0, max_value=60, value=0, step=1, key="pf_minage")
 with col4:
-    max_age = st.number_input("Max Age", min_value=0, max_value=60, value=60, step=1)
+    max_age = st.number_input("Max Age", min_value=0, max_value=60, value=60, step=1, key="pf_maxage")
 
-col5, col6, col7, col8 = st.columns(4)
+col5, col6, col7 = st.columns([1, 1, 2])
 with col5:
-    min_salary = st.number_input("Min Salary", min_value=0, value=0, step=100_000)
+    min_salary = st.number_input("Min Salary", min_value=0, value=0, step=100_000, key="pf_minsal")
 with col6:
-    max_salary = st.number_input("Max Salary", min_value=0, value=0, step=100_000, help="0 means no max")
+    max_salary = st.number_input("Max Salary", min_value=0, value=0, step=100_000, help="0 means no max", key="pf_maxsal")
 with col7:
-    season = st.text_input("Season (optional)", value="", help="e.g., 2024-25 or 2025. Leave blank for all seasons.")
-with col8:
-    include_stats = st.checkbox("Include Season Averages (/basketball/players/<id>/stats)", value=True)
+    include_stats = st.checkbox("Include Season Averages (/basketball/players/<id>/stats)", value=True, key="pf_includestats")
 
-col9, col10, col11 = st.columns([1, 1, 2])
+col8, col9, col10 = st.columns([1, 1, 2])
+with col8:
+    max_stats = st.slider("Max Players for Stats", 10, 200, 50, 10, key="pf_maxstats")
 with col9:
-    max_stats = st.slider("Max Players for Stats", 10, 200, 50, 10)
-with col10:
     stat_to_sort = st.selectbox(
         "Stat to Sort/Chart",
         options=[
@@ -155,15 +160,36 @@ with col10:
             "avg_steals", "avg_blocks", "avg_turnovers",
             "avg_plus_minus", "avg_minutes", "avg_shooting_pct",
         ],
-        index=0
+        index=0,
+        key="pf_stat"
     )
-with col11:
-    run_btn = st.button("Search Players", type="primary")
+with col10:
+    # Make the Search button sticky: set a session flag we can rely on across reruns
+    if st.button("Search Players", type="primary", key="pf_search_btn"):
+        st.session_state.search_active = True
+
+# Optional "New Search" to clear results
+with st.container():
+    st.markdown("")
+    if st.session_state.search_active:
+        if st.button("🔄 New Search (clear results)", key="pf_reset_btn"):
+            st.session_state.search_active = False
 
 st.markdown("---")
 
+# Track filters (not strictly required—useful if you later want to auto-clear on big changes)
+current_filters = {
+    "position": position or None,
+    "team_name": (team_name or "").strip() or None,
+    "min_age": min_age if min_age > 0 else None,
+    "max_age": max_age if max_age < 60 else None,
+    "min_salary": min_salary if min_salary > 0 else None,
+    "max_salary": (None if max_salary == 0 else max_salary),
+}
+st.session_state.last_filters_pf = current_filters
+
 # ---------- Main area ----------
-if run_btn:
+if st.session_state.search_active:
     # Treat 0 as “unset” for max_salary to avoid filtering out everyone
     max_salary_param = None if max_salary == 0 else max_salary
 
@@ -178,6 +204,7 @@ if run_btn:
 
     if df.empty:
         st.warning("No players found for these filters.")
+        # keep search_active True so user can tweak sliders without losing the section
         st.stop()
 
     st.subheader("Players (Basic Info)")
@@ -185,7 +212,7 @@ if run_btn:
 
     if include_stats:
         st.info("Fetching season averages… this may take a moment for many players.")
-        df_stats = enrich_with_stats(df, season if season.strip() else None, max_players=max_stats)
+        df_stats = enrich_with_stats(df, max_players=max_stats)
     else:
         df_stats = df.copy()
 
@@ -202,7 +229,7 @@ if run_btn:
     df_sorted = df_stats.sort_values(by=stat_to_sort, ascending=False, na_position="last")
 
     st.subheader(f"Top Players by **{stat_to_sort}**")
-    top_n = st.slider("Show Top N", 5, 50, 15, 5)
+    top_n = st.slider("Show Top N", 5, 50, 15, 5, key="pf_topn")
 
     # Chart
     chart_cols = ["player_name", stat_to_sort, "position", "current_salary", "expected_salary"]
@@ -242,4 +269,6 @@ with st.expander("Debug Info"):
         "teams_path": "/basketball/teams",
         "stats_path": "/basketball/players/<id>/stats",
         "team_name_entered": team_name,
+        "search_active": st.session_state.search_active,
+        "filters": st.session_state.last_filters_pf,
     })

@@ -20,6 +20,14 @@ st.title("📅 Game Search & Box Scores")
 # If running on your host, set API_BASE_URL=http://localhost:4000
 BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
 
+# ---------------- Session Defaults (keep results sticky) ----------------
+if "gs_search_active" not in st.session_state:
+    st.session_state.gs_search_active = False
+if "gs_selected_game_id" not in st.session_state:
+    st.session_state.gs_selected_game_id = None
+if "gs_last_filters" not in st.session_state:
+    st.session_state.gs_last_filters = {}
+
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
@@ -90,7 +98,6 @@ def filter_games_by_team_names(games: list[dict], names: list[str]) -> list[dict
         home = (g.get("home_team_name") or "").strip().lower()
         away = (g.get("away_team_name") or "").strip().lower()
         teams_in_game = {home, away}
-        # If only one name: match either side; if 2+, require all selected present.
         if (len(wanted) == 1 and wanted & teams_in_game) or (len(wanted) >= 2 and wanted.issubset(teams_in_game)):
             out.append(g)
     return out
@@ -108,36 +115,51 @@ with f1:
     team_names = st.multiselect(
         "Team Name(s)",
         options=team_options,
-        help="Pick one team to see all its games, or two teams to see only head-to-head games."
+        help="Pick one team to see all its games, or two teams to see only head-to-head games.",
+        key="gs_teams"
     )
 with f2:
-    sd = st.date_input("Start Date", value=None, min_value=date(2000,1,1), help="YYYY-MM-DD (inclusive)")
+    sd = st.date_input("Start Date", value=None, min_value=date(2000,1,1), help="YYYY-MM-DD (inclusive)", key="gs_start")
 with f3:
-    ed = st.date_input("End Date", value=None, min_value=date(2000,1,1), help="YYYY-MM-DD (inclusive)")
+    ed = st.date_input("End Date", value=None, min_value=date(2000,1,1), help="YYYY-MM-DD (inclusive)", key="gs_end")
 
 f4, f5, f6 = st.columns(3)
 with f4:
-    season = st.text_input("Season (optional)", value="", help="e.g., 2024-25 or 2025")
-    season = season.strip() or None
+    season = st.text_input("Season (optional)", value="", help="e.g., 2024-25 or 2025", key="gs_season").strip() or None
 with f5:
-    game_type = st.selectbox("Game Type", ["", "regular", "playoff"], index=0)
-    game_type = game_type or None
+    game_type = st.selectbox("Game Type", ["", "regular", "playoff"], index=0, key="gs_type") or None
 with f6:
-    status = st.selectbox("Status", ["", "scheduled", "in_progress", "completed"], index=0)
-    status = status or None
+    status = st.selectbox("Status", ["", "scheduled", "in_progress", "completed"], index=0, key="gs_status") or None
 
-go = st.button("Search Games", type="primary")
+col_btns = st.columns([1, 1, 6])
+with col_btns[0]:
+    if st.button("Search Games", type="primary", key="gs_search_btn"):
+        st.session_state.gs_search_active = True
+with col_btns[1]:
+    if st.session_state.gs_search_active and st.button("🔄 New Search", key="gs_reset_btn"):
+        st.session_state.gs_search_active = False
+        st.session_state.gs_selected_game_id = None
+
 st.markdown("---")
 
 # -------------------------------------------------------------------
 # Results + selection
 # -------------------------------------------------------------------
 games_df = pd.DataFrame()
-selected_game_id = None
 
-if go:
+if st.session_state.gs_search_active:
     start_date = sd.isoformat() if isinstance(sd, date) else None
     end_date = ed.isoformat() if isinstance(ed, date) else None
+
+    # Save filters (optional, for debugging/telemetry)
+    st.session_state.gs_last_filters = dict(
+        teams=team_names,
+        start_date=start_date,
+        end_date=end_date,
+        season=season,
+        game_type=game_type,
+        status=status,
+    )
 
     payload = search_games(
         start_date=start_date,
@@ -156,9 +178,7 @@ if go:
 
         games_df = safe_df(games)
 
-        # Quick summary
-        s = payload.get("summary", {})
-        # Recompute totals after filtering by names
+        # Quick summary (recomputed after team-name filtering)
         total = len(games)
         completed = len([g for g in games if g.get("status") == "completed"])
         scheduled = len([g for g in games if g.get("status") == "scheduled"])
@@ -173,15 +193,32 @@ if go:
         if games_df.empty:
             st.info("No games match these filters.")
         else:
+            # Build selectbox options
             options = [fmt_game_row(g) for g in games]
-            st.subheader("Matching Games")
-            sel = st.selectbox("Choose a game", options=options, index=0)
 
+            # Try to preserve previously selected game across reruns
+            def option_for_game_id(gid: int | None) -> str | None:
+                if gid is None:
+                    return None
+                for g in games:
+                    if int(g.get("game_id")) == int(gid):
+                        return fmt_game_row(g)
+                return None
+
+            preserved_opt = option_for_game_id(st.session_state.gs_selected_game_id)
+            default_index = 0
+            if preserved_opt in options:
+                default_index = options.index(preserved_opt)
+
+            st.subheader("Matching Games")
+            sel = st.selectbox("Choose a game", options=options, index=default_index, key="gs_game_select")
+
+            # Update selected game id from current selection
             if sel:
                 try:
-                    selected_game_id = int(sel.split("]")[0].strip("["))
+                    st.session_state.gs_selected_game_id = int(sel.split("]")[0].strip("["))
                 except Exception:
-                    selected_game_id = int(games[0]["game_id"])
+                    st.session_state.gs_selected_game_id = int(games[0]["game_id"])
 
             # Display list
             show_cols = [
@@ -198,7 +235,8 @@ st.markdown("---")
 # -------------------------------------------------------------------
 # Game details + player box scores
 # -------------------------------------------------------------------
-if selected_game_id:
+selected_game_id = st.session_state.gs_selected_game_id
+if st.session_state.gs_search_active and selected_game_id:
     details = get_game_details(selected_game_id)
     if not details or "game_details" not in details:
         st.error("Failed to load game details.")
@@ -242,7 +280,7 @@ if selected_game_id:
 
         # Quick charts: Top scorers
         st.subheader("Top Scorers")
-        top_n = st.slider("Top N", 3, 15, 8)
+        top_n = st.slider("Top N", 3, 15, 8, key="gs_topn")
         if not home_df.empty and "points" in home_df.columns:
             hchart = home_df.nlargest(top_n, "points")[["player_name", "points"]].copy()
             hfig = px.bar(hchart, x="points", y="player_name", orientation="h", title=f"{home_team} — Top {min(top_n, len(hchart))} by Points")
@@ -251,7 +289,6 @@ if selected_game_id:
             achart = away_df.nlargest(top_n, "points")[["player_name", "points"]].copy()
             afig = px.bar(achart, x="points", y="player_name", orientation="h", title=f"{away_team} — Top {min(top_n, len(achart))} by Points")
             st.plotly_chart(afig, use_container_width=True)
-
 else:
     st.info("Pick one or two Team Names and set any date/season filters, then press **Search Games**. Select a game to view full box scores.")
 
@@ -261,5 +298,8 @@ with st.expander("Debug Info"):
         "BASE_URL": BASE_URL,
         "teams_path": "/basketball/teams",
         "games_path": "/basketball/games",
-        "game_details_path": "/basketball/games/<id>"
+        "game_details_path": "/basketball/games/<id>",
+        "search_active": st.session_state.gs_search_active,
+        "selected_game_id": st.session_state.gs_selected_game_id,
+        "filters": st.session_state.gs_last_filters,
     })
