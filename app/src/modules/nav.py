@@ -56,6 +56,39 @@ def AdminPageNav():
     )
 
 
+def SuperfanNav():
+    """Sidebar links for the Superfan persona."""
+    st.sidebar.page_link("pages/10_Superfan_Home.py", label="Superfan Home", icon="🏀")
+    st.sidebar.page_link("pages/11_Player_Finder.py", label="Player Finder", icon="🔎")
+    st.sidebar.page_link("pages/12_Player_Comparison.py", label="Compare Players", icon="⚖️")
+    st.sidebar.page_link("pages/13_Historical_Game_Results.py", label="Game Results", icon="📊")
+
+
+def DataEngineerNav():
+    """Sidebar links for the Data Engineer persona."""
+    st.sidebar.page_link("pages/20_Data_Engineer_Home.py", label="Data Engineer Home", icon="🛠️")
+    st.sidebar.page_link("pages/21_Data_Pipelines.py", label="Data Pipelines", icon="🔁")
+    st.sidebar.page_link("pages/22_System_Health.py", label="System Health", icon="❤️")
+    st.sidebar.page_link("pages/23_Data_Cleanup.py", label="Data Cleanup", icon="🧹")
+
+
+def HeadCoachNav():
+    """Sidebar links for the Head Coach persona."""
+    st.sidebar.page_link("pages/30_Head_Coach_Home.py", label="Head Coach Home", icon="🎯")
+    st.sidebar.page_link("pages/31_Scouting_Reports.py", label="Scouting Reports", icon="📝")
+    st.sidebar.page_link("pages/32_Lineup_Analysis.py", label="Lineup Analysis", icon="🧩")
+    st.sidebar.page_link("pages/33_Season_Summaries.py", label="Season Summaries", icon="📚")
+    st.sidebar.page_link("pages/34_Player_Matchup.py", label="Player Matchup", icon="🤼")
+
+
+def GeneralManagerNav():
+    """Sidebar links for the General Manager persona."""
+    st.sidebar.page_link("pages/40_General_Manager_Home.py", label="General Manager Home", icon="🏢")
+    st.sidebar.page_link("pages/41_Player_Progress.py", label="Player Progress", icon="📈")
+    st.sidebar.page_link("pages/42_Draft_Rankings.py", label="Draft Rankings", icon="🧾")
+    st.sidebar.page_link("pages/43_Contract_Efficiency.py", label="Contract Efficiency", icon="💼")
+
+
 # --------------------------------Links Function -----------------------------------------------
 def SideBarLinks(show_home=False):
     """
@@ -93,8 +126,22 @@ def SideBarLinks(show_home=False):
         if st.session_state["role"] == "administrator":
             AdminPageNav()
 
-    # Always show the About page at the bottom of the list of links
-    AboutPageNav()
+        # Persona-specific tabs
+        if st.session_state.get("role") == "superfan":
+            SuperfanNav()
+
+        if st.session_state.get("role") == "data_engineer":
+            DataEngineerNav()
+
+        if st.session_state.get("role") == "head_coach":
+            HeadCoachNav()
+
+        if st.session_state.get("role") == "general_manager":
+            GeneralManagerNav()
+
+    # Show the About page only when no user is logged in
+    if not st.session_state.get("authenticated", False):
+        AboutPageNav()
 
     if st.session_state["authenticated"]:
         # Always show a logout button if there is a logged in user

@@ -42,45 +42,86 @@ def get_player_matchups():
 
         cursor = db.get_db().cursor()
 
-        # This query now correctly determines the winning player based on their team's game result
-        # by joining TeamsPlayers for both players to find their team at the time of the game.
+        # Use PlayerMatchup table (bridge) to find recorded matchups between two players.
+        # We build two SELECTs and UNION them so we capture when either player was listed as
+        # the offensive or defensive participant in the PlayerMatchup table, and normalize
+        # the output so player1 refers to the first player_id provided and player2 to the second.
+        season_clause = ''
         matchup_query = '''
             SELECT
                 g.game_id,
                 g.game_date,
                 ht.name AS home_team,
                 at.name AS away_team,
-                pgs1.points AS player1_points,
-                pgs1.rebounds AS player1_rebounds,
-                pgs1.assists AS player1_assists,
-                pgs2.points AS player2_points,
-                pgs2.rebounds AS player2_rebounds,
-                pgs2.assists AS player2_assists,
+                COALESCE(pgs_off.points, 0) AS player1_points,
+                COALESCE(pgs_off.rebounds, 0) AS player1_rebounds,
+                COALESCE(pgs_off.assists, 0) AS player1_assists,
+                COALESCE(pgs_def.points, 0) AS player2_points,
+                COALESCE(pgs_def.rebounds, 0) AS player2_rebounds,
+                COALESCE(pgs_def.assists, 0) AS player2_assists,
                 CASE
-                    WHEN (tp1.team_id = g.home_team_id AND g.home_score > g.away_score) OR 
+                    WHEN (tp1.team_id = g.home_team_id AND g.home_score > g.away_score) OR
                          (tp1.team_id = g.away_team_id AND g.away_score > g.home_score) THEN 1
                     ELSE 0
                 END AS player1_win
-            FROM Game g
+            FROM PlayerMatchup pm
+            JOIN Game g ON pm.game_id = g.game_id
             JOIN Teams ht ON g.home_team_id = ht.team_id
             JOIN Teams at ON g.away_team_id = at.team_id
-            JOIN PlayerGameStats pgs1 ON g.game_id = pgs1.game_id AND pgs1.player_id = %s
-            JOIN PlayerGameStats pgs2 ON g.game_id = pgs2.game_id AND pgs2.player_id = %s
-            JOIN Players p1 ON pgs1.player_id = p1.player_id
-            JOIN Players p2 ON pgs2.player_id = p2.player_id
+            LEFT JOIN PlayerGameStats pgs_off ON pm.game_id = pgs_off.game_id AND pgs_off.player_id = pm.offensive_player_id
+            LEFT JOIN PlayerGameStats pgs_def ON pm.game_id = pgs_def.game_id AND pgs_def.player_id = pm.defensive_player_id
+            JOIN Players p1 ON pm.offensive_player_id = p1.player_id
+            JOIN Players p2 ON pm.defensive_player_id = p2.player_id
             JOIN TeamsPlayers tp1 ON p1.player_id = tp1.player_id AND tp1.joined_date <= g.game_date AND (tp1.left_date IS NULL OR tp1.left_date >= g.game_date)
             JOIN TeamsPlayers tp2 ON p2.player_id = tp2.player_id AND tp2.joined_date <= g.game_date AND (tp2.left_date IS NULL OR tp2.left_date >= g.game_date)
-            WHERE 1=1
+            WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s
         '''
 
-        params = [player1_id, player2_id]
+        # second select swaps offensive/defensive so player1 always maps to the first requested id
+        matchup_query += '''
+            UNION ALL
+            SELECT
+                g.game_id,
+                g.game_date,
+                ht.name AS home_team,
+                at.name AS away_team,
+                COALESCE(pgs_def.points, 0) AS player1_points,
+                COALESCE(pgs_def.rebounds, 0) AS player1_rebounds,
+                COALESCE(pgs_def.assists, 0) AS player1_assists,
+                COALESCE(pgs_off.points, 0) AS player2_points,
+                COALESCE(pgs_off.rebounds, 0) AS player2_rebounds,
+                COALESCE(pgs_off.assists, 0) AS player2_assists,
+                CASE
+                    WHEN (tp2.team_id = g.home_team_id AND g.home_score > g.away_score) OR
+                         (tp2.team_id = g.away_team_id AND g.away_score > g.home_score) THEN 1
+                    ELSE 0
+                END AS player1_win
+            FROM PlayerMatchup pm
+            JOIN Game g ON pm.game_id = g.game_id
+            JOIN Teams ht ON g.home_team_id = ht.team_id
+            JOIN Teams at ON g.away_team_id = at.team_id
+            LEFT JOIN PlayerGameStats pgs_off ON pm.game_id = pgs_off.game_id AND pgs_off.player_id = pm.offensive_player_id
+            LEFT JOIN PlayerGameStats pgs_def ON pm.game_id = pgs_def.game_id AND pgs_def.player_id = pm.defensive_player_id
+            JOIN Players p1 ON pm.offensive_player_id = p1.player_id
+            JOIN Players p2 ON pm.defensive_player_id = p2.player_id
+            JOIN TeamsPlayers tp1 ON p1.player_id = tp1.player_id AND tp1.joined_date <= g.game_date AND (tp1.left_date IS NULL OR tp1.left_date >= g.game_date)
+            JOIN TeamsPlayers tp2 ON p2.player_id = tp2.player_id AND tp2.joined_date <= g.game_date AND (tp2.left_date IS NULL OR tp2.left_date >= g.game_date)
+            WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s
+        '''
 
-        # Apply season filter if provided
+        # Build params: first SELECT expects (player1, player2), second SELECT expects (player2, player1)
+        params = [player1_id, player2_id, player2_id, player1_id]
+
+        # Apply season filter to both SELECTs if provided
         if season:
-            matchup_query += ' AND g.season = %s'
-            params.append(season)
+            season_clause = ' AND g.season = %s'
+            # inject season filter into both WHEREs by replacing the trailing WHERE lines
+            matchup_query = matchup_query.replace('\n        WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s\n        ', '\n        WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s' + season_clause + '\n        ')
+            matchup_query = matchup_query.replace('\n            WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s\n        ', '\n            WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s' + season_clause + '\n        ')
+            params.extend([season, season])
 
-        matchup_query += ' ORDER BY g.game_date DESC'
+        # After UNION the table alias 'g' is out of scope for ORDER BY; use the unioned column name
+        matchup_query += ' ORDER BY game_date DESC'
 
         cursor.execute(matchup_query, params)
         matchup_games = cursor.fetchall()

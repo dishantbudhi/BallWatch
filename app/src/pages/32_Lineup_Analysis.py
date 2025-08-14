@@ -44,28 +44,51 @@ if teams_data and 'teams' in teams_data:
         lineup_data = make_request(
             f"/analytics/lineup-configurations?team_id={team_id}")
 
-        if lineup_data and 'lineup_effectiveness' in lineup_data:
-            st.subheader(f"Lineup Effectiveness for {selected_team}")
+        # Robust handling of the API response and helpful debug output
+        if lineup_data is None:
+            st.error("Failed to retrieve lineup data from API.")
+        elif 'lineup_effectiveness' not in lineup_data:
+            st.error("Unexpected API response structure from /analytics/lineup-configurations")
+            with st.expander("Raw API response"):
+                st.json(lineup_data)
+        else:
+            lineups_raw = lineup_data['lineup_effectiveness']
+            st.info(f"API returned {len(lineups_raw)} lineup records")
 
-            lineups_df = pd.DataFrame(lineup_data['lineup_effectiveness'])
-
-            if not lineups_df.empty:
-                # Prepare data for chart
-                lineups_df = lineups_df.sort_values(
-                    by='plus_minus', ascending=True)
-
-                fig = px.bar(lineups_df,
-                             x='plus_minus',
-                             y='lineup',
-                             orientation='h',
-                             title='Lineup Plus/Minus',
-                             labels={'lineup': 'Lineup',
-                                     'plus_minus': 'Plus/Minus'},
-                             color='plus_minus',
-                             color_continuous_scale=px.colors.sequential.RdBu)
-                st.plotly_chart(fig, use_container_width=True)
-
-                with st.expander("View Raw Data"):
-                    st.table(lineups_df)
-            else:
+            if not lineups_raw:
                 st.warning("No lineup data available for this team.")
+                with st.expander("Raw API response"):
+                    st.json(lineup_data)
+            else:
+                # Build DataFrame robustly and coerce plus_minus to numeric
+                lineups_df = pd.DataFrame(lineups_raw)
+
+                if 'plus_minus' in lineups_df.columns:
+                    lineups_df['plus_minus'] = pd.to_numeric(lineups_df['plus_minus'], errors='coerce')
+                else:
+                    st.warning("API response missing 'plus_minus' field. Showing raw data.")
+                    with st.expander("Raw lineup data"):
+                        st.json(lineups_raw)
+
+                # Check for valid plus_minus values
+                if lineups_df.empty or lineups_df.get('plus_minus') is None or lineups_df['plus_minus'].dropna().empty:
+                    st.warning("No valid plus_minus values in lineup data.")
+                    with st.expander("Raw lineup dataframe"):
+                        st.write(lineups_df)
+                else:
+                    # Prepare data for chart
+                    lineups_df = lineups_df.sort_values(by='plus_minus', ascending=True)
+
+                    fig = px.bar(lineups_df,
+                                 x='plus_minus',
+                                 y='lineup',
+                                 orientation='h',
+                                 title='Lineup Plus/Minus',
+                                 labels={'lineup': 'Lineup',
+                                         'plus_minus': 'Plus/Minus'},
+                                 color='plus_minus',
+                                 color_continuous_scale=px.colors.sequential.RdBu)
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    with st.expander("View Raw Data"):
+                        st.table(lineups_df)
