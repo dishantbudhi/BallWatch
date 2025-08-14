@@ -115,21 +115,21 @@ def get_system_health():
 @admin.route('/data-loads', methods=['GET'])
 def get_data_loads():
     """
-    Get comprehensive history of data loads with filtering options.
+    Get details about data load operations and their status.
 
     Query Parameters:
-        status: Filter by status (pending, running, completed, failed)
-        load_type: Filter by type (player_stats, team_data, game_data, etc.)
-        days: Number of days to look back (default: 30)
+        status: Filter by status (completed, running, failed, pending)
+        days: Number of days to look back (default: 7)
+        load_type: Filter by load type
 
-    User Stories: [Mike-2.5]
+    User Stories: [Mike-2.2]
     """
     try:
-        current_app.logger.info('GET /system/data-loads - Fetching data load history')
+        current_app.logger.info('GET /system/data-loads - Fetching data loads')
 
         status = request.args.get('status')
+        days = request.args.get('days', 7, type=int)
         load_type = request.args.get('load_type')
-        days = request.args.get('days', 30, type=int)
 
         cursor = db.get_db().cursor()
 
@@ -137,14 +137,21 @@ def get_data_loads():
             SELECT
                 log_id as load_id,
                 service_name as load_type,
-                severity as status,
+                CASE 
+                    WHEN severity = 'info' AND resolved_at IS NOT NULL THEN 'completed'
+                    WHEN severity = 'error' OR severity = 'critical' THEN 'failed'
+                    WHEN severity = 'warning' AND resolved_at IS NULL THEN 'running'
+                    WHEN severity = 'warning' AND resolved_at IS NOT NULL THEN 'completed'
+                    ELSE 'pending'
+                END as status,
+                severity,
                 created_at as started_at,
                 resolved_at as completed_at,
-                records_processed,
-                records_failed,
+                IFNULL(records_processed, 0) as records_processed,
+                IFNULL(records_failed, 0) as records_failed,
                 message as error_message,
-                user_id as initiated_by,
                 source_file,
+                (SELECT username FROM Users WHERE user_id = SystemLogs.user_id) as initiated_by,
                 TIMESTAMPDIFF(SECOND, created_at, IFNULL(resolved_at, NOW())) as duration_seconds
             FROM SystemLogs
             WHERE log_type = 'data_load' AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
@@ -153,8 +160,16 @@ def get_data_loads():
         params = [days]
 
         if status:
-            query += ' AND severity = %s'
-            params.append(status)
+            # Map frontend status to backend severity logic
+            if status == 'completed':
+                query += ' AND ((severity = "info" AND resolved_at IS NOT NULL) OR (severity = "warning" AND resolved_at IS NOT NULL))'
+            elif status == 'failed':
+                query += ' AND severity IN ("error", "critical")'
+            elif status == 'running':
+                query += ' AND severity = "warning" AND resolved_at IS NULL'
+            elif status == 'pending':
+                query += ' AND severity NOT IN ("info", "warning", "error", "critical")'
+
         if load_type:
             query += ' AND service_name = %s'
             params.append(load_type)
@@ -164,16 +179,25 @@ def get_data_loads():
         cursor.execute(query, params)
         loads_data = cursor.fetchall()
 
-        # Get status summary statistics
+        # Get status summary
         cursor.execute('''
             SELECT
-                severity as status,
-                COUNT(*) as count,
-                SUM(records_processed) as total_records_processed,
-                SUM(records_failed) as total_records_failed
+                CASE 
+                    WHEN severity = 'info' AND resolved_at IS NOT NULL THEN 'completed'
+                    WHEN severity = 'error' OR severity = 'critical' THEN 'failed'
+                    WHEN severity = 'warning' AND resolved_at IS NULL THEN 'running'
+                    ELSE 'pending'
+                END as status,
+                COUNT(*) as count
             FROM SystemLogs
             WHERE log_type = 'data_load' AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY severity
+            GROUP BY 
+                CASE 
+                    WHEN severity = 'info' AND resolved_at IS NOT NULL THEN 'completed'
+                    WHEN severity = 'error' OR severity = 'critical' THEN 'failed'
+                    WHEN severity = 'warning' AND resolved_at IS NULL THEN 'running'
+                    ELSE 'pending'
+                END
         ''', (days,))
 
         status_summary = cursor.fetchall()
@@ -234,7 +258,8 @@ def start_data_load():
         query = '''
             INSERT INTO SystemLogs (
                 log_type, service_name, severity, message, source_file, user_id
-            ) VALUES ('data_load', %s, 'running', 'Data load initiated', %s, %s)
+            ) VALUES ('data_load', %s, 'warning', 'Data load initiated', %s, 
+                (SELECT user_id FROM Users WHERE username = %s LIMIT 1))
         '''
 
         values = (
@@ -246,11 +271,9 @@ def start_data_load():
         cursor.execute(query, values)
         db.get_db().commit()
 
-        new_load_id = cursor.lastrowid
-
         return make_response(jsonify({
             "message": "Data load initiated successfully",
-            "load_id": new_load_id,
+            "load_id": cursor.lastrowid,
             "load_type": load_data['load_type'],
             "status": "running"
         }), 201)
@@ -362,18 +385,19 @@ def get_error_logs():
 
         query = '''
             SELECT
-                log_id as error_id,
-                log_type as error_type,
-                severity,
-                service_name as module,
-                message as error_message,
-                user_id,
-                created_at,
+                log_id,
+                log_id as data_error_id,   
+                service_name,              
+                service_name as table_name,
+                severity,                  
+                message,
+                created_at as detected_at,
                 resolved_at,
-                resolved_by,
-                resolution_notes
+                records_processed,
+                records_failed,
+                user_id as record_id
             FROM SystemLogs
-            WHERE log_type = 'error' AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE log_type = 'validation' AND severity = 'error' AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
         '''
 
         params = [days]
@@ -504,7 +528,8 @@ def get_data_errors():
     Get details about data validation errors and integrity issues.
 
     Query Parameters:
-        service_name: Filter by service name
+        service_name: Filter by service/component name
+        severity: Filter by severity level (error, warning, critical)
         days: Number of days to look back (default: 7)
 
     User Stories: [Mike-2.4]
@@ -513,6 +538,7 @@ def get_data_errors():
         current_app.logger.info('GET /system/data-errors - Fetching data validation errors')
 
         service_name = request.args.get('service_name')
+        severity = request.args.get('severity')  # Add severity filter
         days = request.args.get('days', 7, type=int)
 
         cursor = db.get_db().cursor()
@@ -521,11 +547,18 @@ def get_data_errors():
             SELECT
                 log_id as data_error_id,
                 service_name as table_name,
-                message,
+                severity,
+                message as error_message,
+                records_processed,
+                records_failed,
                 created_at as detected_at,
-                resolved_at
+                resolved_at,
+                resolved_by,
+                resolution_notes,
+                user_id
             FROM SystemLogs
-            WHERE log_type = 'validation' AND severity = 'error' AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE log_type = 'validation' AND severity IN ('error', 'warning', 'critical') 
+            AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
         '''
 
         params = [days]
@@ -533,21 +566,27 @@ def get_data_errors():
         if service_name:
             query += ' AND service_name = %s'
             params.append(service_name)
+            
+        if severity:
+            query += ' AND severity = %s'
+            params.append(severity)
 
         query += ' ORDER BY created_at DESC'
 
         cursor.execute(query, params)
         data_errors = cursor.fetchall()
 
-        # Get error summary by type and table
+        # Update error summary to show by service and severity
         cursor.execute('''
             SELECT
-                service_name as table_name,
+                service_name as component,
+                severity,
                 COUNT(*) as count,
                 SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) as resolved_count
             FROM SystemLogs
-            WHERE log_type = 'validation' AND severity = 'error' AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY service_name
+            WHERE log_type = 'validation' AND severity IN ('error', 'warning', 'critical')
+            AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            GROUP BY service_name, severity
             ORDER BY count DESC
         ''', (days,))
 

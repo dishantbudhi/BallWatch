@@ -40,19 +40,25 @@ with tab1:
     
     col1, col2, col3 = st.columns(3)
     with col1:
-        error_type_filter = st.selectbox("Error Type", 
-            ["All", "duplicate", "missing", "invalid"], key="data_error_type")
+        # Update to use severity levels from SystemLogs
+        severity_filter = st.selectbox("Severity", 
+            ["All", "error", "warning", "critical"], key="data_severity")
     with col2:
-        table_filter = st.text_input("Table Name", key="data_table")
+        # Use service_name instead of table_name for filtering
+        service_filter = st.selectbox("Service/Component", 
+            ["All", "Performance Metrics", "Data Consistency", "Foreign Key Check", 
+             "Data Range Check", "Duplicate Check", "Business Logic", "Schema Integrity",
+             "Data Quality", "Constraint Check", "Referential Check", "Data Freshness"], 
+            key="data_service")
     with col3:
         days_filter = st.number_input("Days to look back", min_value=1, max_value=90, value=7, key="data_days")
     
     if st.button("Load Data Errors", key="load_data_errors"):
         params = f"?days={days_filter}"
-        if error_type_filter != "All":
-            params += f"&error_type={error_type_filter}"
-        if table_filter:
-            params += f"&table_name={table_filter}"
+        if severity_filter != "All":
+            params += f"&severity={severity_filter}"
+        if service_filter != "All":
+            params += f"&service_name={service_filter}"
         
         endpoint = f"/system/data-errors{params}"
         
@@ -61,27 +67,59 @@ with tab1:
         if data and 'errors' in data:
             st.session_state['data_errors'] = data['errors']
             st.success(f"Found {len(data['errors'])} data errors")
+            
+            # Add debug info
+            if st.session_state.get('debug_mode', False):
+                with st.expander("🔍 Debug: API Response"):
+                    st.write("**Full Response:**")
+                    st.json(data)
+                    if data['errors']:
+                        st.write("**Sample Error Record:**")
+                        st.json(data['errors'][0])
     
+    # Update the display section:
     if 'data_errors' in st.session_state:
         errors = st.session_state['data_errors']
         
         if errors:
+            st.write(f"**Showing {len(errors)} data validation errors:**")
+            
             for error in errors:
-                with st.expander(f"Error #{error['data_error_id']} - {error['error_type']} in {error['table_name']}"):
+                error_id = error.get('data_error_id', 'N/A')
+                severity = error.get('severity', 'unknown')
+                table_name = error.get('table_name', 'unknown')
+                
+                # Use color coding for severity
+                severity_color = "🔴" if severity == "critical" else "🟡" if severity == "error" else "🟠"
+                
+                with st.expander(f"{severity_color} Error #{error_id} - {severity.upper()} in {table_name}"):
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        st.write(f"**Record ID:** {error['record_id']}")
-                        st.write(f"**Field:** {error['field_name']}")
-                        st.write(f"**Invalid Value:** {error['invalid_value']}")
-                        st.write(f"**Expected Format:** {error['expected_format']}")
+                        st.write(f"**Service/Component:** {error.get('table_name', 'N/A')}")
+                        st.write(f"**Error Message:** {error.get('error_message', 'N/A')}")
+                        st.write(f"**Severity:** {error.get('severity', 'N/A').upper()}")
+                        st.write(f"**Records Processed:** {error.get('records_processed', 'N/A')}")
+                        st.write(f"**Records Failed:** {error.get('records_failed', 'N/A')}")
                         
                     with col2:
-                        st.write(f"**Detected:** {error['detected_at']}")
-                        st.write(f"**Resolved:** {error.get('resolved_at', 'Not resolved')}")
-                        st.write(f"**Auto-fixed:** {'Yes' if error.get('auto_fixed') else 'No'}")
+                        st.write(f"**Detected At:** {error.get('detected_at', 'N/A')}")
+                        resolved_status = "✅ Resolved" if error.get('resolved_at') else "❌ Unresolved"
+                        st.write(f"**Status:** {resolved_status}")
+                        if error.get('resolved_at'):
+                            st.write(f"**Resolved At:** {error.get('resolved_at', 'N/A')}")
+                            st.write(f"**Resolved By:** {error.get('resolved_by', 'N/A')}")
+                        if error.get('resolution_notes'):
+                            st.write(f"**Resolution Notes:** {error.get('resolution_notes', 'N/A')}")
+                        
+                        # Add action buttons for unresolved errors
+                        if not error.get('resolved_at'):
+                            if st.button(f"Mark as Resolved", key=f"resolve_{error_id}"):
+                                st.info("Resolution functionality would go here")
         else:
-            st.info("No data errors found for the selected criteria")
+            st.info("No data validation errors found for the selected criteria")
+    else:
+        st.info("Click 'Load Data Errors' to fetch validation errors from the system")
 
 with tab2:
     st.header("Data Cleanup Management")

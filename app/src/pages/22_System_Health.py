@@ -202,6 +202,11 @@ if error_data:
     if errors:
         df_errors = pd.DataFrame(errors)
         
+        # Debug: Check what columns we actually have
+        if st.session_state.get('debug_mode', False):
+            st.write("Available columns:", list(df_errors.columns))
+            st.write("Sample data:", df_errors.head(1).to_dict('records'))
+        
         df_errors['severity_display'] = df_errors['severity'].apply(
             lambda x: f"CRITICAL" if x == 'critical'
             else f"ERROR" if x == 'error'  
@@ -216,18 +221,38 @@ if error_data:
         if 'created_at' in df_errors.columns:
             df_errors['created_at'] = pd.to_datetime(df_errors['created_at']).dt.strftime('%Y-%m-%d %H:%M')
         
+        # Use the actual column names from SystemLogs
+        display_columns = []
+        column_config = {}
+        
+        # Map the available columns
+        if 'log_id' in df_errors.columns:
+            display_columns.append('log_id')
+            column_config['log_id'] = st.column_config.NumberColumn("ID", width="small")
+        
+        if 'service_name' in df_errors.columns:
+            display_columns.append('service_name')
+            column_config['service_name'] = "Service"
+        
+        if 'severity_display' in df_errors.columns:
+            display_columns.append('severity_display')
+            column_config['severity_display'] = "Severity"
+        
+        if 'message' in df_errors.columns:
+            display_columns.append('message')
+            column_config['message'] = "Message"
+        
+        if 'created_at' in df_errors.columns:
+            display_columns.append('created_at')
+            column_config['created_at'] = "Time"
+        
+        if 'status' in df_errors.columns:
+            display_columns.append('status')
+            column_config['status'] = "Status"
+        
         st.dataframe(
-            df_errors[['error_id', 'error_type', 'severity_display', 'module', 
-                      'error_message', 'created_at', 'status']],
-            column_config={
-                "error_id": st.column_config.NumberColumn("ID", width="small"),
-                "error_type": "Type",
-                "severity_display": "Severity", 
-                "module": "Module",
-                "error_message": "Message",
-                "created_at": "Time",
-                "status": "Status"
-            },
+            df_errors[display_columns],
+            column_config=column_config,
             use_container_width=True,
             hide_index=True
         )
@@ -296,108 +321,3 @@ else:
         use_container_width=True,
         hide_index=True
     )
-
-st.divider()
-
-st.subheader("Data Validation")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.write("**Run Data Validation Check**")
-    validation_type = st.selectbox("Validation Type", 
-                                  ["integrity_check", "duplicate_check", "null_check"])
-    table_name = st.selectbox("Table", ["Players", "Teams", "Game", "PlayerGameStats"])
-    
-    if st.button("Run Validation", type="primary"):
-        with st.spinner("Running validation check..."):
-            result = api_post('/system/data-validation', {
-                'validation_type': validation_type,
-                'table_name': table_name,
-                'run_by': 'Mike Lewis'
-            })
-            
-            if result:
-                results = result.get('results', {})
-                status = results.get('status', 'unknown')
-                total_records = results.get('total_records', 0)
-                valid_records = results.get('valid_records', 0)
-                invalid_records = results.get('invalid_records', 0)
-                validity_percentage = results.get('validity_percentage', 0)
-                
-                if status == 'passed':
-                    st.success(f"Validation passed! {valid_records}/{total_records} records are valid ({validity_percentage}%)")
-                elif status == 'warning':
-                    st.warning(f"Validation passed with warnings. {invalid_records} issues found in {total_records} records")
-                elif status == 'failed':
-                    st.error(f"Validation failed. {invalid_records} issues found in {total_records} records")
-                else:
-                    st.info(f"Validation completed with status: {status}")
-            else:
-                st.error("Failed to run validation")
-
-with col2:
-    st.write("**Recent Validation Results**")
-    validation_data = api_get('/system/data-validation?days=7')
-    
-    if validation_data:
-        reports = validation_data.get('validation_reports', [])
-        if reports:
-            for report in reports[-3:]:
-                status = report.get('status', 'unknown')
-                table_name = report.get('table_name', 'Unknown')
-                validation_type = report.get('validation_type', 'Unknown')
-                
-                if status == 'passed':
-                    st.success(f"{table_name} - {validation_type}")
-                elif status == 'warning':
-                    st.warning(f"{table_name} - {validation_type}")
-                else:
-                    st.error(f"{table_name} - {validation_type}")
-                st.caption(f"Run on {report.get('run_date', 'Unknown')}")
-        else:
-            st.info("No recent validation reports")
-    else:
-        st.info("Validation data unavailable")
-
-st.divider()
-
-st.subheader("System Recommendations")
-
-recommendations = []
-
-if health_data:
-    error_count = health_data.get('recent_errors_24h', 0)
-    active_loads = health_data.get('active_data_loads', 0)
-    db_status = health_data.get('database_status', 'unknown')
-    
-    if error_count > 10:
-        recommendations.append(("error", "High error rate detected. Review error logs for patterns."))
-    elif error_count > 5:
-        recommendations.append(("warning", "Moderate error activity. Monitor for trends."))
-    else:
-        recommendations.append(("success", "Error rate within normal parameters"))
-    
-    if active_loads > 3:
-        recommendations.append(("warning", "Multiple concurrent loads detected. Monitor system resources."))
-    else:
-        recommendations.append(("success", "Data load capacity normal"))
-    
-    if db_status == 'healthy':
-        recommendations.append(("success", "Database connection stable"))
-    else:
-        recommendations.append(("error", "Database issues detected. Check connection settings."))
-else:
-    recommendations = [
-        ("error", "Unable to connect to system health API"),
-        ("warning", "Check API connectivity and backend services"),
-        ("success", "Page functionality working with mock data")
-    ]
-
-for rec_type, message in recommendations:
-    if rec_type == "error":
-        st.error(message)
-    elif rec_type == "warning":
-        st.warning(message)
-    else:
-        st.success(message)
