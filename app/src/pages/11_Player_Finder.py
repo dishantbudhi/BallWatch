@@ -10,12 +10,12 @@ from modules.nav import SideBarLinks
 logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Player Finder", layout="wide")
 
-# Render your app's sidebar nav (logo, links, auth redirect, etc.)
+# Sidebar nav (logo, links, auth, etc.)
 SideBarLinks()
 
 st.title("🔎 Player Finder (Superfan)")
 
-# If your Streamlit app runs in Docker alongside the API, keep http://api:4000
+# If Streamlit runs in Docker with the API, keep http://api:4000
 # If you run Streamlit on your host, set API_BASE_URL=http://localhost:4000
 BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
 
@@ -31,50 +31,108 @@ def api_get(path: str, params: dict | None = None):
         st.error(f"Connection error: {e}")
     return None
 
-@st.cache_data(ttl=120)
-def load_players(position=None, team_id=None, min_age=None, max_age=None, min_salary=None, max_salary=None):
-    params = {}
-    if position: params["position"] = position
-    if team_id: params["team_id"] = team_id
-    if min_age is not None: params["min_age"] = min_age
-    if max_age is not None: params["max_age"] = max_age
-    if min_salary is not None: params["min_salary"] = min_salary
-    if max_salary is not None: params["max_salary"] = max_salary
+@st.cache_data(ttl=300)
+def fetch_teams_df() -> pd.DataFrame:
+    """Load all teams once for name→id resolution and UI help."""
+    resp = api_get("/basketball/teams")
+    teams = resp.get("teams", []) if isinstance(resp, dict) else (resp or [])
+    df = pd.DataFrame(teams)
+    # Normalize expected columns
+    wanted = ["team_id", "name", "city", "conference", "division"]
+    for c in wanted:
+        if c not in df.columns:
+            df[c] = None
+    return df
 
-    # ✅ Prefixed path
-    data = api_get("/basketball/players", params)
+@st.cache_data(ttl=300)
+def resolve_team_ids_by_name(name_query: str) -> list[int]:
+    """
+    Try to match team name (case-insensitive).
+    Returns all matching IDs (exact first; if none, contains).
+    """
+    if not name_query:
+        return []
+    df = fetch_teams_df()
+    if df.empty or "name" not in df.columns or "team_id" not in df.columns:
+        return []
 
-    # Your /players handler currently returns a list (not wrapped in {"players": ...})
-    if isinstance(data, dict) and "players" in data:
-        rows = data["players"]
-    else:
-        rows = data or []
+    # 1) exact (case-insensitive)
+    exact = df[df["name"].str.lower() == name_query.strip().lower()]
+    if not exact.empty:
+        return exact["team_id"].dropna().astype(int).tolist()
+
+    # 2) contains (case-insensitive)
+    contains = df[df["name"].str.contains(name_query, case=False, na=False)]
+    return contains["team_id"].dropna().astype(int).tolist()
+
+@st.cache_data(ttl=180)
+def load_players(position=None, team_name=None, min_age=None, max_age=None, min_salary=None, max_salary=None):
+    """
+    Preferred: resolve team_name → team_id(s) and query per id.
+    Fallback: fetch all w/ other filters, then client-filter by current_team contains team_name.
+    """
+    base_params = {}
+    if position: base_params["position"] = position
+    if min_age is not None: base_params["min_age"] = min_age
+    if max_age is not None: base_params["max_age"] = max_age
+    if min_salary is not None: base_params["min_salary"] = min_salary
+    if max_salary is not None: base_params["max_salary"] = max_salary
+
+    rows: list[dict] = []
+
+    if team_name:
+        team_ids = resolve_team_ids_by_name(team_name)
+        if team_ids:
+            for tid in team_ids:
+                params = {**base_params, "team_id": tid}
+                data = api_get("/basketball/players", params)
+                part = data.get("players", []) if isinstance(data, dict) else (data or [])
+                rows.extend(part)
+            if rows:
+                # De-dup by player_id (keep last occurrence)
+                rows = list({r.get("player_id"): r for r in rows if r.get("player_id") is not None}.values())
+                return pd.DataFrame(rows)
+
+        # Fallback: no IDs matched — fetch once and filter locally by team name
+        data = api_get("/basketball/players", base_params)
+        rows = data.get("players", []) if isinstance(data, dict) else (data or [])
+        df_all = pd.DataFrame(rows)
+        if df_all.empty:
+            return df_all
+        if "current_team" not in df_all.columns:
+            # If API doesn’t return current_team, no client-side filter possible
+            return pd.DataFrame()
+        mask = df_all["current_team"].fillna("").str.contains(team_name, case=False, na=False)
+        return df_all[mask].reset_index(drop=True)
+
+    # No team filter: simple fetch
+    data = api_get("/basketball/players", base_params)
+    rows = data.get("players", []) if isinstance(data, dict) else (data or [])
     return pd.DataFrame(rows)
 
-@st.cache_data(ttl=120)
-def fetch_player_season_stat(player_id: int, season: str | None):
-    params = {}
-    if season:
-        params["season"] = season
-    # NOTE: Your /players/<id>/stats returns a dict {stats: {...}, recent_games: [...]}
-    # ✅ Prefixed path
-    resp = api_get(f"/basketball/players/{player_id}/stats", params)
-    if not resp or "stats" not in resp or resp["stats"] is None:
+@st.cache_data(ttl=180)
+def fetch_player_all_stats(player_id: int):
+    """
+    Pull /basketball/players/<id>/stats with NO season/game_type filters
+    to include *all* data.
+    Supports either {stats: {...}} or {player_stats: {...}} keys.
+    """
+    resp = api_get(f"/basketball/players/{player_id}/stats")
+    if not resp:
         return {}
-    return resp["stats"]
+    return resp.get("stats") or resp.get("player_stats") or {}
 
-def enrich_with_stats(df_players: pd.DataFrame, season: str | None, max_players: int = 50):
-    """For performance, cap the number of stat fetches."""
+def enrich_with_stats(df_players: pd.DataFrame, max_players: int = 50):
+    """For performance, cap the number of stat fetches; uses all-time data."""
     if df_players.empty:
         return df_players
 
     rows = []
     limit = min(len(df_players), max_players)
     for _, row in df_players.head(limit).iterrows():
-        stats = fetch_player_season_stat(int(row["player_id"]), season)
+        stats = fetch_player_all_stats(int(row["player_id"]))
         merged = {**row.to_dict(), **(stats or {})}
         rows.append(merged)
-    # If there are more players than max_players, keep the remaining without stats.
     if len(df_players) > limit:
         remainder = df_players.iloc[limit:].copy()
         rows += [r for _, r in remainder.iterrows()]
@@ -92,27 +150,24 @@ with col1:
         help="Filter by the player's listed position."
     )
 with col2:
-    team_id_input = st.text_input("Team ID (optional)", value="", help="Enter a numeric team_id.")
-    team_id = int(team_id_input) if team_id_input.strip().isdigit() else None
+    team_name = st.text_input("Team Name (optional)", value="", help="Type a team name (partial match allowed).")
 with col3:
     min_age = st.number_input("Min Age", min_value=0, max_value=60, value=0, step=1)
 with col4:
     max_age = st.number_input("Max Age", min_value=0, max_value=60, value=60, step=1)
 
-col5, col6, col7, col8 = st.columns(4)
+col5, col6, col7 = st.columns([1, 1, 2])
 with col5:
     min_salary = st.number_input("Min Salary", min_value=0, value=0, step=100_000)
 with col6:
     max_salary = st.number_input("Max Salary", min_value=0, value=0, step=100_000, help="0 means no max")
 with col7:
-    season = st.text_input("Season (optional)", value="", help="e.g., 2024-25 or 2025. Leave blank for all seasons.")
-with col8:
-    include_stats = st.checkbox("Include Season Averages (/basketball/players/<id>/stats)", value=True)
+    include_stats = st.checkbox("Include Season Averages (/basketball/players/<id>/stats, all data)", value=True)
 
-col9, col10, col11 = st.columns([1, 1, 2])
-with col9:
+col8, col9, col10 = st.columns([1, 1, 2])
+with col8:
     max_stats = st.slider("Max Players for Stats", 10, 200, 50, 10)
-with col10:
+with col9:
     stat_to_sort = st.selectbox(
         "Stat to Sort/Chart",
         options=[
@@ -122,7 +177,7 @@ with col10:
         ],
         index=0
     )
-with col11:
+with col10:
     run_btn = st.button("Search Players", type="primary")
 
 st.markdown("---")
@@ -134,7 +189,7 @@ if run_btn:
 
     df = load_players(
         position=(position or None),
-        team_id=team_id,
+        team_name=team_name.strip() or None,
         min_age=min_age if min_age > 0 else None,
         max_age=max_age if max_age < 60 else None,
         min_salary=min_salary if min_salary > 0 else None,
@@ -149,8 +204,8 @@ if run_btn:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     if include_stats:
-        st.info("Fetching season averages… this may take a moment for many players.")
-        df_stats = enrich_with_stats(df, season if season.strip() else None, max_players=max_stats)
+        st.info("Fetching averages… this may take a moment for many players.")
+        df_stats = enrich_with_stats(df, max_players=max_stats)
     else:
         df_stats = df.copy()
 
@@ -204,5 +259,7 @@ with st.expander("Debug Info"):
     st.write({
         "BASE_URL": BASE_URL,
         "players_path": "/basketball/players",
-        "stats_path": "/basketball/players/<id>/stats"
+        "teams_path": "/basketball/teams",
+        "stats_path": "/basketball/players/<id>/stats",
+        "team_name_entered": team_name,
     })

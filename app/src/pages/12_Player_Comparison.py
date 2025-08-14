@@ -34,63 +34,133 @@ def api_get(path: str, params: dict | None = None):
         st.error(f"Connection error: {e}")
     return None
 
+@st.cache_data(ttl=300)
+def fetch_teams_df() -> pd.DataFrame:
+    """Load all teams once for name→id resolution and UI help."""
+    resp = api_get("/basketball/teams")
+    teams = resp.get("teams", []) if isinstance(resp, dict) else (resp or [])
+    df = pd.DataFrame(teams)
+    # normalize columns we use
+    for col in ["team_id", "name", "city", "conference", "division"]:
+        if col not in df.columns:
+            df[col] = None
+    return df
+
+@st.cache_data(ttl=300)
+def resolve_team_ids_by_name(name_query: str) -> list[int]:
+    """
+    Case-insensitive match on team name.
+    Tries exact first, then 'contains'. Returns a list of team_ids.
+    """
+    if not name_query:
+        return []
+    df = fetch_teams_df()
+    if df.empty:
+        return []
+    exact = df[df["name"].str.lower() == name_query.strip().lower()]
+    if not exact.empty:
+        return exact["team_id"].dropna().astype(int).tolist()
+    contains = df[df["name"].str.contains(name_query, case=False, na=False)]
+    return contains["team_id"].dropna().astype(int).tolist()
+
 @st.cache_data(ttl=180)
-def load_all_players(position=None, team_id=None):
-    params = {}
-    if position: params["position"] = position
-    if team_id: params["team_id"] = team_id
-    data = api_get("/basketball/players", params)
-    rows = data["players"] if isinstance(data, dict) and "players" in data else (data or [])
-    df = pd.DataFrame(rows)
-    # Build a friendly display label
+def load_all_players(position: str | None = None, team_name: str | None = None) -> pd.DataFrame:
+    """
+    Load players with optional position and *team name* filter.
+    - Preferred: resolve team name -> team_id(s) and call /basketball/players?team_id=...
+    - Fallback: fetch once then client-filter by current_team (contains).
+    """
+    base_params = {}
+    if position:
+        base_params["position"] = position
+
+    rows: list[dict] = []
+
+    if team_name:
+        team_ids = resolve_team_ids_by_name(team_name)
+        if team_ids:
+            for tid in team_ids:
+                params = {**base_params, "team_id": tid}
+                data = api_get("/basketball/players", params)
+                part = data.get("players", []) if isinstance(data, dict) else (data or [])
+                rows.extend(part)
+            if rows:
+                # de-dup by player_id
+                rows = list({r.get("player_id"): r for r in rows if r.get("player_id") is not None}.values())
+                df = pd.DataFrame(rows)
+            else:
+                df = pd.DataFrame()
+        else:
+            # Fallback to client-side filter
+            data = api_get("/basketball/players", base_params)
+            rows = data.get("players", []) if isinstance(data, dict) else (data or [])
+            df = pd.DataFrame(rows)
+            if not df.empty and "current_team" in df.columns:
+                mask = df["current_team"].fillna("").str.contains(team_name, case=False, na=False)
+                df = df[mask].reset_index(drop=True)
+    else:
+        data = api_get("/basketball/players", base_params)
+        rows = data.get("players", []) if isinstance(data, dict) else (data or [])
+        df = pd.DataFrame(rows)
+
+    # Build a friendly display label for pickers
     if not df.empty:
-        df["display"] = df["first_name"].astype(str) + " " + df["last_name"].astype(str) + \
-                        df.apply(lambda x: f" · {x['position']}" if pd.notna(x.get("position")) else "", axis=1)
+        if "position" not in df.columns:
+            df["position"] = ""
+        df["display"] = (
+            df.get("first_name", "").astype(str) + " " +
+            df.get("last_name", "").astype(str) +
+            df.apply(lambda x: f" · {x['position']}" if pd.notna(x.get("position")) else "", axis=1)
+        )
     return df
 
 @st.cache_data(ttl=180)
-def fetch_player_stats(player_id: int, season: str | None, game_type: str | None):
-    params = {}
-    if season: params["season"] = season
-    if game_type: params["game_type"] = game_type  # your route maps to is_playoff internally
-    resp = api_get(f"/basketball/players/{player_id}/stats", params)
-    if not resp: return {}, pd.DataFrame()
-    stats = resp.get("stats", {}) or {}
-    recent = pd.DataFrame(resp.get("recent_games", []) or [])
-    # Normalize expected columns (rename if your API uses 'date' vs 'game_date', etc.)
+def fetch_player_stats(player_id: int):
+    """
+    Pull stats with NO season/game_type filters (all data).
+    Supports both {stats: {...}} and {player_stats: {...}} response shapes.
+    Returns (stats_dict, recent_games_df)
+    """
+    resp = api_get(f"/basketball/players/{player_id}/stats")
+    if not resp:
+        return {}, pd.DataFrame()
+
+    stats = resp.get("stats") or resp.get("player_stats") or {}
+    recent_key = "recent_games"
+    recent = pd.DataFrame(resp.get(recent_key, []) or [])
+
+    # normalize recent games columns (just in case)
     if "game_date" not in recent.columns and "date" in recent.columns:
-        recent = recent.rename(columns={"date":"game_date"})
+        recent = recent.rename(columns={"date": "game_date"})
+
     return stats, recent
 
 # ------------------------------------------------------------------------------------
-# Filters
+# Filters (no season or game_type)
 # ------------------------------------------------------------------------------------
 st.header("Filters")
 
-fcol1, fcol2, fcol3, fcol4 = st.columns([1.5, 1.5, 1, 1])
+fcol1, fcol2 = st.columns([1.5, 1.5])
 with fcol1:
-    position_filter = st.selectbox("Position Filter (optional)",
-                                   ["", "PG", "SG", "SF", "PF", "C", "Guard", "Forward", "Center"], index=0)
-    position_filter = position_filter or None
+    position_filter = st.selectbox(
+        "Position Filter (optional)",
+        ["", "Guard", "Forward", "Center"],
+        index=0
+    ) or None
 with fcol2:
-    team_id_text = st.text_input("Team ID Filter (optional)", value="")
-    team_id_filter = int(team_id_text) if team_id_text.strip().isdigit() else None
-with fcol3:
-    season = st.text_input("Season (optional)", value="", help="e.g., 2024-25 or 2025")
-    season = season.strip() or None
-with fcol4:
-    game_type = st.selectbox("Game Type", ["All", "regular", "playoff"], index=0)
-    game_type = None if game_type == "All" else game_type
+    team_name_filter = st.text_input("Team Name Filter (optional)", value="")
 
 st.markdown("")
 
 # Load player list with optional filters for easier searching
-players_df = load_all_players(position=position_filter, team_id=team_id_filter)
+players_df = load_all_players(position=position_filter, team_name=team_name_filter.strip() or None)
 if players_df.empty:
     st.warning("No players available. Adjust filters or load data.")
     st.stop()
 
-# Search boxes for two players
+# ------------------------------------------------------------------------------------
+# Player pickers
+# ------------------------------------------------------------------------------------
 scol1, scol2 = st.columns(2)
 with scol1:
     search1 = st.text_input("Search Player 1 by name", value="")
@@ -108,9 +178,9 @@ with scol2:
     default_idx = 1 if len(df2) > 1 else 0
     player2 = st.selectbox("Select Player 2", options=df2["display"].tolist(), index=default_idx if not df2.empty else None)
 
-# Resolve to player_id
 def pick_id(df, display):
-    if df.empty or not display: return None
+    if df.empty or not display:
+        return None
     row = df[df["display"] == display].head(1)
     return int(row["player_id"].iloc[0]) if not row.empty else None
 
@@ -120,18 +190,23 @@ p2_id = pick_id(players_df, player2)
 run = st.button("Compare Players", type="primary")
 st.markdown("---")
 
+# ------------------------------------------------------------------------------------
+# Comparison
+# ------------------------------------------------------------------------------------
 if run and p1_id and p2_id:
-    # Pull stats + recent games (box scores)
-    p1_stats, p1_recent = fetch_player_stats(p1_id, season, game_type)
-    p2_stats, p2_recent = fetch_player_stats(p2_id, season, game_type)
+    # Pull stats + recent games (box scores) with NO season/game_type filters
+    p1_stats, p1_recent = fetch_player_stats(p1_id)
+    p2_stats, p2_recent = fetch_player_stats(p2_id)
 
     # Basic info cards
     c1, c2 = st.columns(2)
+
     def name_for(pid):
         row = players_df[players_df["player_id"] == pid]
-        if row.empty: return "Unknown"
-        fn = row["first_name"].iloc[0]
-        ln = row["last_name"].iloc[0]
+        if row.empty:
+            return "Unknown"
+        fn = row["first_name"].iloc[0] if "first_name" in row.columns else ""
+        ln = row["last_name"].iloc[0] if "last_name" in row.columns else ""
         pos = row.get("position", pd.Series([""])).iloc[0]
         team = row.get("current_team", pd.Series([""])).iloc[0]
         return f"{fn} {ln} ({pos}) · {team}"
@@ -139,7 +214,6 @@ if run and p1_id and p2_id:
     with c1:
         st.subheader("Player 1")
         st.info(name_for(p1_id))
-        # Show a few headline metrics if present
         for label, key in [
             ("Games Played", "games_played"),
             ("Avg Points", "avg_points"),
@@ -150,6 +224,7 @@ if run and p1_id and p2_id:
         ]:
             if key in p1_stats and p1_stats[key] is not None:
                 st.metric(label, p1_stats[key])
+
     with c2:
         st.subheader("Player 2")
         st.info(name_for(p2_id))
@@ -167,7 +242,11 @@ if run and p1_id and p2_id:
     st.markdown("---")
 
     # Radar chart comparison
-    radar_cols = ["avg_points", "avg_rebounds", "avg_assists", "avg_steals", "avg_blocks", "avg_turnovers", "avg_plus_minus", "avg_minutes", "avg_shooting_pct"]
+    radar_cols = [
+        "avg_points", "avg_rebounds", "avg_assists",
+        "avg_steals", "avg_blocks", "avg_turnovers",
+        "avg_plus_minus", "avg_minutes", "avg_shooting_pct"
+    ]
     p1_vals = [float(p1_stats.get(k, 0) or 0) for k in radar_cols]
     p2_vals = [float(p2_stats.get(k, 0) or 0) for k in radar_cols]
     display_names = [name_for(p1_id), name_for(p2_id)]
@@ -188,8 +267,6 @@ if run and p1_id and p2_id:
     # Normalize/ensure columns for plotting
     for df_recent in (p1_recent, p2_recent):
         if not df_recent.empty:
-            # expected: game_id, game_date, home_team, away_team, points, rebounds, assists, minutes_played
-            # Handle potential column names
             if "points" not in df_recent.columns and "PTS" in df_recent.columns:
                 df_recent.rename(columns={"PTS": "points"}, inplace=True)
             if "rebounds" not in df_recent.columns and "REB" in df_recent.columns:
@@ -203,11 +280,13 @@ if run and p1_id and p2_id:
         lp2 = p2_recent.head(ng).copy()
         lp1["player"] = display_names[0]
         lp2["player"] = display_names[1]
-        chart_cols = []
-        if not lp1.empty: chart_cols.append(lp1)
-        if not lp2.empty: chart_cols.append(lp2)
-        if chart_cols:
-            combined = pd.concat(chart_cols, ignore_index=True)
+        chart_parts = []
+        if not lp1.empty:
+            chart_parts.append(lp1)
+        if not lp2.empty:
+            chart_parts.append(lp2)
+        if chart_parts:
+            combined = pd.concat(chart_parts, ignore_index=True)
             # Use game_date or fallback to index
             if "game_date" in combined.columns:
                 combined["game_date"] = pd.to_datetime(combined["game_date"], errors="coerce")
@@ -236,5 +315,8 @@ with st.expander("Debug Info"):
     st.write({
         "BASE_URL": BASE_URL,
         "players_path": "/basketball/players",
-        "stats_path": "/basketball/players/<id>/stats"
+        "stats_path": "/basketball/players/<id>/stats",
+        "teams_path": "/basketball/teams",
+        "position_filter": position_filter,
+        "team_name_filter": team_name_filter,
     })
