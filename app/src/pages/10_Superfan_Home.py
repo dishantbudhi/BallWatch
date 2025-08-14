@@ -17,7 +17,7 @@ if st.button('Player Comparison',
              use_container_width=True):
     st.switch_page('pages/12_Player_Comparison.py')
 
-if st.button('Player Stats',
+if st.button('Player Finder',
              type='primary',
              use_container_width=True):
     st.switch_page('pages/11_Player_Finder.py')
