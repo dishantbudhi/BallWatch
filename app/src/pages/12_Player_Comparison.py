@@ -150,7 +150,7 @@ fcol1, fcol2 = st.columns([1.5, 1.5])
 with fcol1:
     position_filter = st.selectbox(
         "Position Filter (optional)",
-        ["", "Guard", "Forward", "Center"],
+        ["", "PG", "SG", "SF", "PF", "C", "Guard", "Forward", "Center"],
         index=0,
         key="pos_filter"
     ) or None

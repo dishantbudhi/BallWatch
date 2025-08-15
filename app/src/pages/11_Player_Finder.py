@@ -159,7 +159,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     position = st.selectbox(
         "Position",
-        options=["", "Guard", "Forward", "Center"],
+        options=["", "PG", "SG", "SF", "PF", "C", "Guard", "Forward", "Center"],
         index=0,
         help="Filter by the player's listed position.",
         key="pf_position"
