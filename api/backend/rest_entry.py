@@ -4,14 +4,12 @@ BallWatch Basketball Analytics Platform
 CS 3200 - Summer 2 2025
 Team: StatPadders
 
-Flask REST API Entry Point
-Provides comprehensive basketball analytics for teams and fans through 
-data-driven insights, player statistics, and strategic analysis.
-
-Author: StatPadders Team
+Flask REST API Entry Point - Enhanced with DB Connection Retry
 """
 
 import os
+import time
+import logging
 from flask import Flask
 from dotenv import load_dotenv
 
@@ -25,6 +23,7 @@ from backend.strategy.strategy_routes import strategy
 from backend.admin.admin_routes import admin
 from backend.auth.auth_routes import auth
 
+logger = logging.getLogger(__name__)
 
 def create_app():
     """
@@ -39,8 +38,8 @@ def create_app():
     load_dotenv()
     _configure_app(app)
     
-    # Initialize database connection
-    _initialize_database(app)
+    # Initialize database connection with retry logic
+    _initialize_database_with_retry(app)
     
     # Register API blueprints
     _register_blueprints(app)
@@ -56,22 +55,49 @@ def _configure_app(app):
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY')
     
     # MySQL Database Configuration
-    app.config['MYSQL_DATABASE_USER'] = os.getenv('DB_USER', '').strip()
+    app.config['MYSQL_DATABASE_USER'] = os.getenv('DB_USER', 'root').strip()
     app.config['MYSQL_DATABASE_PASSWORD'] = os.getenv('MYSQL_ROOT_PASSWORD', '').strip()
-    app.config['MYSQL_DATABASE_HOST'] = os.getenv('DB_HOST', 'localhost').strip()
+    app.config['MYSQL_DATABASE_HOST'] = os.getenv('DB_HOST', 'db').strip()  # Default to 'db' for Docker
     app.config['MYSQL_DATABASE_PORT'] = int(os.getenv('DB_PORT', '3306').strip())
     app.config['MYSQL_DATABASE_DB'] = os.getenv('DB_NAME', 'BallWatch').strip()
+    
+    # Add connection pool settings
+    app.config['MYSQL_DATABASE_CHARSET'] = 'utf8mb4'
+    app.config['MYSQL_DATABASE_AUTOCOMMIT'] = True
 
 
-def _initialize_database(app):
-    """Initialize database connection with the Flask app."""
+def _initialize_database_with_retry(app):
+    """Initialize database connection with retry logic for Docker environments."""
     app.logger.info('🏀 Initializing BallWatch database connection...')
-    try:
-        db.init_app(app)
-        app.logger.info('✅ Database connection established successfully')
-    except Exception as e:
-        app.logger.error(f'❌ Database connection failed: {e}')
-        raise
+    
+    max_retries = 30  # Wait up to 30 seconds for DB to be ready
+    retry_delay = 1
+    
+    for attempt in range(max_retries):
+        try:
+            db.init_app(app)
+            
+            # Test the connection
+            with app.app_context():
+                cursor = db.get_db().cursor()
+                cursor.execute('SELECT 1')
+                cursor.fetchone()
+                cursor.close()
+            
+            app.logger.info('✅ Database connection established successfully')
+            return
+            
+        except Exception as e:
+            app.logger.warning(f'🔄 Database connection attempt {attempt + 1}/{max_retries} failed: {e}')
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            else:
+                app.logger.error('❌ Database connection failed after all retries')
+                # In development, we might want to continue without DB
+                if os.getenv('FLASK_ENV') == 'development':
+                    app.logger.warning('⚠️  Continuing without database in development mode')
+                    return
+                raise
 
 
 def _register_blueprints(app):
@@ -88,8 +114,11 @@ def _register_blueprints(app):
     ]
     
     for blueprint, prefix, description in blueprints:
-        app.register_blueprint(blueprint, url_prefix=prefix)
-        app.logger.info(f'  ✓ {blueprint.name} ({prefix}): {description}')
+        try:
+            app.register_blueprint(blueprint, url_prefix=prefix)
+            app.logger.info(f'  ✓ {blueprint.name} ({prefix}): {description}')
+        except Exception as e:
+            app.logger.error(f'  ❌ Failed to register {blueprint.name}: {e}')
 
 
 def _log_startup_info(app):
