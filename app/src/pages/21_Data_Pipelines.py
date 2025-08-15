@@ -183,7 +183,7 @@ def _extract_loads(resp):
     if isinstance(resp, list):
         return resp
     if isinstance(resp, dict):
-        for k in ('loads', 'results', 'data', 'items'):
+        for k in ('data_loads', 'loads', 'results', 'data', 'items'):
             if k in resp and resp[k] is not None:
                 return resp[k]
         # some endpoints may return the list at top-level under other keys
@@ -230,28 +230,57 @@ if loads and len(loads) > 0:
         
         # Some rows may have status derived differently; ensure column exists
         if 'status' not in df.columns:
-            df['status'] = df.get('severity', 'pending').apply(lambda x: str(x))
+            df['status'] = df.get('severity', pd.Series(['pending'] * len(df))).apply(lambda x: str(x))
         df['status_display'] = df['status'].apply(format_status)
         
-        # Format dates with fallbacks
-        df['started_at'] = pd.to_datetime(df.get('started_at') or df.get('created_at'), errors='coerce').dt.strftime('%m/%d %H:%M')
+        # Format dates with proper fallbacks - fix the ambiguous Series evaluation
+        # Use fillna() and combine_first() instead of 'or' operator
+        if 'started_at' not in df.columns:
+            if 'created_at' in df.columns:
+                df['started_at'] = df['created_at']
+            else:
+                df['started_at'] = pd.NaT
+        
+        df['started_at'] = pd.to_datetime(df['started_at'], errors='coerce').dt.strftime('%m/%d %H:%M')
+        
+        # Handle completed_at column similarly
+        if 'completed_at' not in df.columns:
+            if 'resolved_at' in df.columns:
+                df['completed_at'] = df['resolved_at']
+            else:
+                df['completed_at'] = None
+        
         df['completed_at'] = df['completed_at'].apply(
             lambda x: pd.to_datetime(x, errors='coerce').strftime('%m/%d %H:%M') if pd.notna(x) and x else 'In Progress'
         )
         
-        # Format duration
+        # Format duration - ensure duration_seconds column exists
+        if 'duration_seconds' not in df.columns:
+            df['duration_seconds'] = 0
+        
         df['duration_display'] = df['duration_seconds'].apply(
-            lambda x: f"{int(x//60)}m {int(x%60)}s" if pd.notna(x) else 'N/A'
+            lambda x: f"{int(x//60)}m {int(x%60)}s" if pd.notna(x) and x != 0 else 'N/A'
         )
 
+        # Ensure all required columns exist with defaults
+        required_columns = ['load_id', 'load_type', 'status_display', 'started_at', 'completed_at', 
+                           'duration_display', 'records_processed', 'records_failed', 'initiated_by']
+        
+        for col in required_columns:
+            if col not in df.columns:
+                if col in ['records_processed', 'records_failed']:
+                    df[col] = 0
+                elif col == 'initiated_by':
+                    df[col] = 'system'
+                else:
+                    df[col] = 'N/A'
+
         # Display enhanced table
+        display_columns = [col for col in required_columns if col in df.columns]
         st.dataframe(
-            df[['load_id', 'load_type', 'status_display', 'started_at', 'completed_at', 
-                'duration_display', 'records_processed', 'records_failed', 'initiated_by']]
-            if set(['load_id','load_type','status_display','started_at','completed_at','duration_display','records_processed','records_failed','initiated_by']).issubset(df.columns)
-            else df,
+            df[display_columns],
             column_config={
-                "load_id": st.column_config.NumberColumn("Load ID", width="small") if 'load_id' in df.columns else None,
+                "load_id": st.column_config.NumberColumn("Load ID", width="small"),
             },
             use_container_width=True,
             hide_index=True

@@ -158,9 +158,6 @@ def get_system_health():
 
 @admin.route('/data-loads', methods=['GET'])
 def get_data_loads():
-    """
-    Get details about data load operations and their status.
-    """
     try:
         current_app.logger.info('GET /system/data-loads - Fetching data loads')
 
@@ -170,17 +167,16 @@ def get_data_loads():
 
         cursor = db.get_db().cursor()
 
-        # Be permissive when identifying data_load rows: either explicit log_type or service/message patterns
+        # Simplified and more inclusive query to match sample data
         query = '''
             SELECT
                 log_id as load_id,
-                service_name as load_type,
-                -- normalize status using both log_type and severity (including legacy values)
+                COALESCE(service_name, 'Unknown Service') as load_type,
                 CASE
-                    WHEN (severity IN ('info','low') AND resolved_at IS NOT NULL) OR (log_type = 'data_load' AND severity IN ('info','low')) THEN 'completed'
-                    WHEN (severity IN ('error','critical','high') OR log_type = 'error') THEN 'failed'
-                    WHEN (severity IN ('warning','medium') AND resolved_at IS NULL) THEN 'running'
-                    WHEN (severity IN ('warning','medium') AND resolved_at IS NOT NULL) THEN 'completed'
+                    WHEN severity IN ('info','low') AND resolved_at IS NOT NULL THEN 'completed'
+                    WHEN severity IN ('error','critical','high') THEN 'failed'
+                    WHEN severity IN ('warning','medium') AND resolved_at IS NULL THEN 'running'
+                    WHEN severity IN ('warning','medium') AND resolved_at IS NOT NULL THEN 'completed'
                     ELSE 'pending'
                 END as status,
                 severity,
@@ -193,58 +189,58 @@ def get_data_loads():
                 (SELECT username FROM Users WHERE user_id = SystemLogs.user_id) as initiated_by,
                 TIMESTAMPDIFF(SECOND, created_at, IFNULL(resolved_at, NOW())) as duration_seconds
             FROM SystemLogs
-            WHERE (log_type = 'data_load' OR LOWER(service_name) LIKE '%data%' OR LOWER(service_name) LIKE '%feed%' OR LOWER(message) LIKE '%load%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND (log_type IN ('data_load', 'error', 'warning', 'info') 
+                   OR service_name IS NOT NULL 
+                   OR records_processed > 0)
         '''
 
         params = [days]
 
-        if status:
-            # Accept frontend status and filter against our computed status or legacy severity values
+        # Simplified status filtering
+        if status and status != 'All':
             if status == 'completed':
-                query += ' AND ((severity IN ("info","low") AND resolved_at IS NOT NULL) OR (severity IN ("warning","medium") AND resolved_at IS NOT NULL) OR log_type = "data_load")'
+                query += ' AND ((severity IN ("info","low") AND resolved_at IS NOT NULL) OR (severity IN ("warning","medium") AND resolved_at IS NOT NULL))'
             elif status == 'failed':
-                query += ' AND (severity IN ("error","critical","high") OR log_type = "error")'
+                query += ' AND severity IN ("error","critical","high")'
             elif status == 'running':
-                query += ' AND ( (severity IN ("warning","medium") AND resolved_at IS NULL) OR (resolved_at IS NULL AND log_type = "data_load") )'
+                query += ' AND severity IN ("warning","medium") AND resolved_at IS NULL'
             elif status == 'pending':
                 query += ' AND severity NOT IN ("info","low","warning","medium","error","critical","high")'
 
-        if load_type:
-            query += ' AND service_name = %s'
-            params.append(load_type)
+        if load_type and load_type != 'All':
+            query += ' AND service_name LIKE %s'
+            params.append(f'%{load_type}%')
 
-        query += ' ORDER BY created_at DESC'
+        query += ' ORDER BY created_at DESC LIMIT 100'
 
         cursor.execute(query, params)
         loads_data = cursor.fetchall()
 
-        # Post-process to ensure severity/status normalized for JSON consumers
+        # Post-process to ensure consistent data format
         for row in loads_data:
-            row['severity'] = _normalize_severity(row.get('severity') or row.get('log_type'))
-            # ensure load_type has a friendly value
-            row['load_type'] = row.get('load_type')
+            row['severity'] = _normalize_severity(row.get('severity'))
+            # Ensure load_type has a value
+            if not row.get('load_type') or row['load_type'] == 'Unknown Service':
+                row['load_type'] = row.get('service_name', 'System Process')
 
-        # Get status summary (tolerant of legacy severity values)
+        # Get status summary with more inclusive criteria
         cursor.execute('''
             SELECT
                 CASE
-                    WHEN (severity IN ('info','low') AND resolved_at IS NOT NULL) OR (severity IN ('warning','medium') AND resolved_at IS NOT NULL) THEN 'completed'
-                    WHEN (severity IN ('error','critical','high')) THEN 'failed'
-                    WHEN (severity IN ('warning','medium') AND resolved_at IS NULL) THEN 'running'
+                    WHEN severity IN ('info','low') AND resolved_at IS NOT NULL THEN 'completed'
+                    WHEN severity IN ('warning','medium') AND resolved_at IS NOT NULL THEN 'completed'
+                    WHEN severity IN ('error','critical','high') THEN 'failed'
+                    WHEN severity IN ('warning','medium') AND resolved_at IS NULL THEN 'running'
                     ELSE 'pending'
                 END as status,
                 COUNT(*) as count
             FROM SystemLogs
-            WHERE (log_type = 'data_load' OR LOWER(service_name) LIKE '%data%' OR LOWER(message) LIKE '%load%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY
-                CASE
-                    WHEN (severity IN ('info','low') AND resolved_at IS NOT NULL) OR (severity IN ('warning','medium') AND resolved_at IS NOT NULL) THEN 'completed'
-                    WHEN (severity IN ('error','critical','high')) THEN 'failed'
-                    WHEN (severity IN ('warning','medium') AND resolved_at IS NULL) THEN 'running'
-                    ELSE 'pending'
-                END
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND (log_type IN ('data_load', 'error', 'warning', 'info') 
+                   OR service_name IS NOT NULL 
+                   OR records_processed > 0)
+            GROUP BY 1
         ''', (days,))
 
         status_summary = cursor.fetchall()
@@ -422,7 +418,7 @@ def get_error_logs():
 
         cursor = db.get_db().cursor()
 
-        # Be permissive: sample data sometimes stores severity-like values in log_type
+        # Fixed query to match actual SystemLogs schema
         query = '''
             SELECT
                 log_id,
@@ -430,59 +426,112 @@ def get_error_logs():
                 service_name,
                 service_name as table_name,
                 severity,
+                log_type,
                 message,
                 created_at as detected_at,
+                created_at,
                 resolved_at,
                 records_processed,
                 records_failed,
-                user_id as record_id
+                user_id,
+                resolved_by,
+                resolution_notes,
+                error_rate_pct,
+                response_time,
+                source_file
             FROM SystemLogs
-            WHERE (log_type IN ('error','validation') OR severity IS NOT NULL)
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
         '''
 
         params = [days]
 
-        if severity:
-            # accept either canonical or legacy values
-            params.append(severity)
-            query += ' AND (severity = %s OR LOWER(severity) = %s)'
-        if service_name:
+        # Fixed: Double the % characters to escape them properly
+        query += '''
+            AND (
+                log_type IN ('error', 'validation', 'warning') 
+                OR severity IN ('error', 'critical', 'high', 'medium', 'warning')
+                OR message LIKE '%%error%%'
+                OR message LIKE '%%fail%%'
+                OR message LIKE '%%timeout%%'
+                OR message LIKE '%%exception%%'
+                OR records_failed > 0
+                OR error_rate_pct > 0
+            )
+        '''
+
+        # Fixed severity filtering
+        if severity and severity != 'All':
+            if severity == 'critical':
+                query += ' AND (severity IN ("critical", "high") OR log_type = "critical")'
+            elif severity == 'error':
+                query += ' AND (severity IN ("error", "medium") OR log_type = "error")'
+            elif severity == 'warning':
+                query += ' AND (severity = "warning" OR log_type = "warning")'
+            elif severity == 'info':
+                query += ' AND (severity IN ("info", "low") OR log_type = "info")'
+
+        if service_name and service_name != 'All':
             query += ' AND service_name = %s'
             params.append(service_name)
+
         if resolved is not None:
             if resolved.lower() == 'true':
                 query += ' AND resolved_at IS NOT NULL'
             else:
                 query += ' AND resolved_at IS NULL'
 
-        query += ' ORDER BY created_at DESC'
+        query += ' ORDER BY created_at DESC LIMIT 200'
+
+        current_app.logger.debug(f'Executing query with {len(params)} parameters')
+        current_app.logger.debug(f'Query: {query}')
+        current_app.logger.debug(f'Parameters: {params}')
 
         cursor.execute(query, params)
         error_logs = cursor.fetchall()
 
-        # Normalize severity in returned rows
-        for r in error_logs:
-            raw = r.get('severity') or r.get('log_type')
-            r['severity'] = _normalize_severity(raw)
+        # Normalize data for frontend
+        for log in error_logs:
+            # Map severity to standard values
+            raw_severity = log.get('severity', 'info')
+            log['severity'] = _normalize_severity(raw_severity)
+            
+            # Ensure required fields exist with defaults
+            log['service_name'] = log.get('service_name') or 'System'
+            log['table_name'] = log.get('service_name') or 'System'
+            log['error_message'] = log.get('message') or 'No message'
+            log['record_id'] = log.get('user_id')  # Map user_id to record_id for frontend
+            
+            # Format timestamps
+            if log.get('created_at'):
+                log['detected_at'] = log['created_at']
 
-        # Get error summary by severity - tolerant grouping
+        # Get summary statistics - also fix the LIKE clauses here
         cursor.execute('''
             SELECT
                 CASE
-                    WHEN severity IN ('critical','high') THEN 'critical'
-                    WHEN severity IN ('error','medium') THEN 'error'
-                    WHEN severity IN ('warning') THEN 'warning'
+                    WHEN severity IN ('critical','high') OR log_type = 'critical' THEN 'critical'
+                    WHEN severity IN ('error','medium') OR log_type = 'error' THEN 'error'
+                    WHEN severity = 'warning' OR log_type = 'warning' THEN 'warning'
+                    WHEN severity IN ('info','low') OR log_type = 'info' THEN 'info'
                     ELSE 'info'
-                END as severity,
+                END as severity_group,
                 COUNT(*) as count,
                 SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) as resolved_count
             FROM SystemLogs
-            WHERE (log_type IN ('error','validation') OR severity IS NOT NULL)
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND (
+                log_type IN ('error', 'validation', 'warning') 
+                OR severity IN ('error', 'critical', 'high', 'medium', 'warning')
+                OR message LIKE '%%error%%'
+                OR message LIKE '%%fail%%'
+                OR message LIKE '%%timeout%%'
+                OR message LIKE '%%exception%%'
+                OR records_failed > 0
+                OR error_rate_pct > 0
+              )
             GROUP BY 1
             ORDER BY
-                CASE severity
+                CASE severity_group
                     WHEN 'critical' THEN 1
                     WHEN 'error' THEN 2
                     WHEN 'warning' THEN 3
@@ -494,16 +543,20 @@ def get_error_logs():
 
         response_data = {
             'error_logs': error_logs,
+            'errors': error_logs,  # Provide both keys for frontend flexibility
             'total_errors': len(error_logs),
             'severity_breakdown': severity_summary,
             'analysis_period_days': days
         }
 
+        current_app.logger.info(f'Returning {len(error_logs)} error logs')
         return make_response(jsonify(response_data), 200)
 
     except Exception as e:
         current_app.logger.error(f'Error fetching error logs: {e}')
-        return make_response(jsonify({"error": "Failed to fetch error logs"}), 500)
+        import traceback
+        current_app.logger.error(f'Full traceback: {traceback.format_exc()}')
+        return make_response(jsonify({"error": "Failed to fetch error logs", "details": str(e)}), 500)
 
 
 # ============================================================================
@@ -513,85 +566,263 @@ def get_error_logs():
 @admin.route('/data-errors', methods=['GET'])
 def get_data_errors():
     """
-    Get details about data validation errors and integrity issues.
+    Get data validation errors with filtering options.
     """
     try:
         current_app.logger.info('GET /system/data-errors - Fetching data validation errors')
 
-        service_name = request.args.get('service_name')
+        # Convert days parameter to integer with proper error handling
+        days_param = request.args.get('days', '7')
+        try:
+            days = int(days_param)
+        except (ValueError, TypeError):
+            days = 7
+        
         severity = request.args.get('severity')
-        days = request.args.get('days', 7, type=int)
+        service_name = request.args.get('service_name')
+        table_name = request.args.get('table_name')  # Support both parameter names
 
         cursor = db.get_db().cursor()
 
+        # Query to get data validation errors from SystemLogs
         query = '''
             SELECT
                 log_id as data_error_id,
+                log_id,
+                service_name,
                 service_name as table_name,
                 severity,
+                log_type as error_type,
                 message as error_message,
-                records_processed,
-                records_failed,
+                message,
                 created_at as detected_at,
+                created_at,
                 resolved_at,
                 resolved_by,
                 resolution_notes,
+                records_processed,
+                records_failed,
+                error_rate_pct,
+                response_time,
+                source_file,
                 user_id
             FROM SystemLogs
-            WHERE (log_type = 'validation' OR log_type = 'error' OR LOWER(service_name) LIKE '%data%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND (
+                log_type IN ('validation', 'data_quality', 'constraint', 'error')
+                OR severity IN ('error', 'critical', 'high', 'medium', 'warning')
+                OR message LIKE '%%validation%%'
+                OR message LIKE '%%constraint%%'
+                OR message LIKE '%%duplicate%%'
+                OR message LIKE '%%invalid%%'
+                OR message LIKE '%%quality%%'
+                OR records_failed > 0
+                OR error_rate_pct > 0
+              )
         '''
 
         params = [days]
 
-        if service_name:
-            query += ' AND service_name = %s'
-            params.append(service_name)
-        if severity:
-            query += ' AND (severity = %s OR LOWER(severity) = %s)'
-            params.append(severity)
-            params.append(severity.lower())
+        # Add severity filter
+        if severity and severity != 'All':
+            if severity == 'critical':
+                query += ' AND (severity IN ("critical", "high") OR log_type = "critical")'
+            elif severity == 'error':
+                query += ' AND (severity IN ("error", "medium") OR log_type = "error")'
+            elif severity == 'warning':
+                query += ' AND (severity = "warning" OR log_type = "warning")'
 
-        query += ' ORDER BY created_at DESC'
+        # Add service/table filter (support both parameter names)
+        filter_service = service_name or table_name
+        if filter_service and filter_service != 'All':
+            query += ' AND service_name LIKE %s'
+            params.append(f'%{filter_service}%')
+
+        query += ' ORDER BY created_at DESC LIMIT 100'
+
+        current_app.logger.debug(f'Executing data-errors query with {len(params)} parameters')
+        current_app.logger.debug(f'Parameters: {params}')
 
         cursor.execute(query, params)
         data_errors = cursor.fetchall()
 
-        # Normalize severity values
-        for r in data_errors:
-            r['severity'] = _normalize_severity(r.get('severity'))
+        # Process results for frontend compatibility
+        for error in data_errors:
+            # Normalize severity
+            raw_severity = error.get('severity', 'info')
+            error['severity'] = _normalize_severity(raw_severity)
+            
+            # Ensure required fields exist
+            error['service_name'] = error.get('service_name') or 'System'
+            error['table_name'] = error.get('service_name') or 'System'
+            error['error_message'] = error.get('message') or error.get('error_message') or 'No message'
+            
+            # Map fields for frontend compatibility
+            if not error.get('data_error_id'):
+                error['data_error_id'] = error.get('log_id')
 
-        # Update error summary to show by service and severity
+        # Get summary statistics
         cursor.execute('''
             SELECT
-                service_name as component,
                 CASE
-                    WHEN severity IN ('critical','high') THEN 'critical'
-                    WHEN severity IN ('error','medium') THEN 'error'
-                    WHEN severity IN ('warning') THEN 'warning'
+                    WHEN severity IN ('critical','high') OR log_type = 'critical' THEN 'critical'
+                    WHEN severity IN ('error','medium') OR log_type = 'error' THEN 'error'
+                    WHEN severity = 'warning' OR log_type = 'warning' THEN 'warning'
                     ELSE 'info'
-                END as severity,
+                END as severity_group,
                 COUNT(*) as count,
                 SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) as resolved_count
             FROM SystemLogs
-            WHERE (log_type = 'validation' OR log_type = 'error' OR LOWER(service_name) LIKE '%data%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY service_name, severity
-            ORDER BY count DESC
+            WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND (
+                log_type IN ('validation', 'data_quality', 'constraint', 'error')
+                OR severity IN ('error', 'critical', 'high', 'medium', 'warning')
+                OR message LIKE '%%validation%%'
+                OR message LIKE '%%constraint%%'
+                OR message LIKE '%%duplicate%%'
+                OR message LIKE '%%invalid%%'
+                OR message LIKE '%%quality%%'
+                OR records_failed > 0
+                OR error_rate_pct > 0
+              )
+            GROUP BY 1
         ''', (days,))
 
-        error_summary = cursor.fetchall()
+        severity_summary = cursor.fetchall()
 
         response_data = {
-            'errors': data_errors,
+            'data_errors': data_errors,
+            'errors': data_errors,  # Provide both keys for frontend flexibility
+            'error_logs': data_errors,  # Additional compatibility
             'total_errors': len(data_errors),
-            'error_breakdown': error_summary,
+            'severity_breakdown': severity_summary,
             'analysis_period_days': days
+        }
+
+        current_app.logger.info(f'Returning {len(data_errors)} data validation errors')
+        return make_response(jsonify(response_data), 200)
+
+    except Exception as e:
+        current_app.logger.error(f'Error fetching data errors: {e}')
+        import traceback
+        current_app.logger.error(f'Full traceback: {traceback.format_exc()}')
+        return make_response(jsonify({"error": "Failed to fetch data errors", "details": str(e)}), 500)
+
+
+@admin.route('/data-cleanup', methods=['GET'])
+def get_cleanup_schedule():
+    """
+    Get the current data cleanup schedule and execution history.
+
+    User Stories: [Mike-2.6]
+    """
+    try:
+        current_app.logger.info('GET /system/data-cleanup - Fetching cleanup schedules')
+
+        cursor = db.get_db().cursor()
+
+        # Get active cleanup schedules (as recurring logs)
+        cursor.execute('''
+            SELECT
+                log_id as schedule_id,
+                service_name as cleanup_type,
+                message as frequency,
+                created_at as last_run,
+                user_id as created_by,
+                created_at
+            FROM SystemLogs
+            WHERE log_type = 'cleanup'
+            ORDER BY created_at DESC
+        ''')
+
+        schedules = cursor.fetchall()
+
+
+        response_data = {
+            'active_schedules': schedules,
+            'recent_cleanup_history': schedules,
+            'total_active_schedules': len(schedules)
         }
 
         return make_response(jsonify(response_data), 200)
 
     except Exception as e:
-        current_app.logger.error(f'Error fetching data errors: {e}')
-        return make_response(jsonify({"error": "Failed to fetch data errors"}), 500)
+        current_app.logger.error(f'Error fetching cleanup schedules: {e}')
+        return make_response(jsonify({"error": "Failed to fetch cleanup schedules"}), 500)
 
+
+@admin.route('/data-cleanup', methods=['POST'])
+def schedule_cleanup():
+    """
+    Schedule a new data cleanup job.
+
+    Expected JSON Body:
+        {
+            "cleanup_type": "string" (required),
+            "frequency": "string" (daily, weekly, monthly) (required),
+            "retention_days": int (required),
+            "created_by": "string" (required)
+        }
+
+    User Stories: [Mike-2.6]
+    """
+    try:
+        current_app.logger.info('POST /system/data-cleanup - Scheduling new cleanup job')
+
+        cleanup_data = request.get_json()
+
+        # Validate required fields
+        required_fields = ['cleanup_type', 'frequency', 'retention_days', 'created_by']
+        for field in required_fields:
+            if field not in cleanup_data:
+                return make_response(jsonify({"error": f"Missing required field: {field}"}), 400)
+
+        cursor = db.get_db().cursor()
+
+        # Get user_id from username, or use a default if not found
+        user_lookup_query = '''
+            SELECT user_id FROM Users WHERE username = %s LIMIT 1
+        '''
+        cursor.execute(user_lookup_query, (cleanup_data['created_by'],))
+        user_result = cursor.fetchone()
+        
+        # Use the found user_id, or default to 1 (assuming there's a system user)
+        user_id = user_result['user_id'] if user_result else 1
+
+        # Insert cleanup schedule
+        query = '''
+            INSERT INTO SystemLogs (
+                log_type, service_name, severity, message, user_id, records_processed
+            ) VALUES ('cleanup', %s, 'info', %s, %s, %s)
+        '''
+
+        cleanup_message = f"Scheduled {cleanup_data['frequency']} cleanup with {cleanup_data['retention_days']} days retention";
+        
+        values = (
+            cleanup_data['cleanup_type'],
+            cleanup_message,
+            user_id,
+            cleanup_data['retention_days']  # Store retention_days in records_processed field
+        )
+
+        cursor.execute(query, values)
+        db.get_db().commit()
+
+        new_schedule_id = cursor.lastrowid
+
+        current_app.logger.info(f'Cleanup scheduled successfully: ID {new_schedule_id}, Type: {cleanup_data["cleanup_type"]}')
+
+        return make_response(jsonify({
+            "message": "Cleanup scheduled successfully",
+            "schedule_id": new_schedule_id,
+            "cleanup_type": cleanup_data['cleanup_type'],
+            "frequency": cleanup_data['frequency'],
+            "retention_days": cleanup_data['retention_days'],
+            "created_by": cleanup_data['created_by'],
+            "user_id": user_id
+        }), 201)
+
+    except Exception as e:
+        current_app.logger.error(f'Error scheduling cleanup: {e}')
+        db.get_db().rollback()
+        return make_response(jsonify({"error": "Failed to schedule cleanup", "details": str(e)}), 500)

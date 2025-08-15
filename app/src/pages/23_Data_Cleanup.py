@@ -186,14 +186,6 @@ with tab2:
                             # created_by may be stored as user_id; fall back gracefully
                             st.write(f"**Created By:** {schedule.get('created_by', schedule.get('user_id', 'N/A'))}")
 
-        if 'cleanup_history' in st.session_state:
-            history = st.session_state['cleanup_history']
-            
-            if history:
-                st.write("**Recent Cleanup History:**")
-                for item in history[:5]:
-                    status_text = "COMPLETED" if item.get('status', '') == 'completed' else "FAILED"
-                    st.write(f"[{status_text}] {item.get('cleanup_type', item.get('service_name', 'Unknown'))} - {item.get('started_at', item.get('created_at', 'N/A'))} - {item.get('records_deleted', item.get('records_deleted', 0))} records deleted")
     
     with cleanup_tab2:
         st.subheader("Schedule New Cleanup")
