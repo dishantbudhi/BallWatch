@@ -197,10 +197,9 @@ with tab1:
                                     st.markdown('**Top Tactical Recommendations**')
                                     for r in recs:
                                         st.success(r)
-
-                                # Original behavior: mark for practice only shows confirmation
-                                if st.button('Mark recommendations for practice'):
-                                    st.info('Marked tactical items for next practice focus.')
+                                        
+                                # REMOVED: "Mark recommendations for practice" button and functionality
+                                # This feature has been removed as requested
 
                         with st.expander('View Raw Report'):
                             st.json(report)

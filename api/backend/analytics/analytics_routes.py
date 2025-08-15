@@ -431,7 +431,6 @@ def get_lineup_configurations():
     try:
         current_app.logger.info('GET /lineup-configurations handler started')
 
-        # Extract and validate parameters
         team_id = request.args.get('team_id', type=int)
         min_games = request.args.get('min_games', 5, type=int)
         season = request.args.get('season')
@@ -441,7 +440,7 @@ def get_lineup_configurations():
 
         cursor = db.get_db().cursor()
 
-        # FIX: Corrected query to ensure all players in a lineup belong to the selected team.
+        # Simplified query: join player names for each lineup and return top lineups by plus_minus
         lineup_query = '''
             SELECT
                 lc.lineup_id,
@@ -450,20 +449,15 @@ def get_lineup_configurations():
                 lc.offensive_rating,
                 lc.defensive_rating
             FROM LineupConfiguration lc
-            JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
-            JOIN Players p ON pl.player_id = p.player_id
+            LEFT JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
+            LEFT JOIN Players p ON pl.player_id = p.player_id
             WHERE lc.team_id = %s
             GROUP BY lc.lineup_id, lc.plus_minus, lc.offensive_rating, lc.defensive_rating
-            HAVING SUM(
-                CASE WHEN pl.player_id IN (
-                    SELECT player_id FROM TeamsPlayers WHERE team_id = %s AND left_date IS NULL
-                ) THEN 0 ELSE 1 END
-            ) = 0
             ORDER BY lc.plus_minus DESC
-            LIMIT 10;
+            LIMIT 10
         '''
 
-        cursor.execute(lineup_query, [team_id, team_id])
+        cursor.execute(lineup_query, (team_id,))
         lineup_stats = cursor.fetchall()
 
         response_data = {
@@ -628,7 +622,7 @@ def get_situational_performance():
       - last_n_games (optional)
 
     Returns:
-      JSON with best-effort situational aggregates. Falls back gracefully if play-by-play is not available.
+      JSON with situational aggregates.
     """
     try:
         current_app.logger.info('GET /situational-performance handler started')
@@ -647,29 +641,29 @@ def get_situational_performance():
             'close_games': None
         }
 
-        # Best-effort: try to query ClutchStats table if exists
+        # Clutch: average metrics from ClutchStats (if table populated)
         try:
             cursor.execute('''
                 SELECT
                     ROUND(AVG(cs.off_rating),1) AS off_rating,
                     ROUND(AVG(cs.def_rating),1) AS def_rating,
                     ROUND(AVG(cs.net_rating),1) AS net_rating,
-                    COUNT(cs.game_id) AS clutch_games
+                    COUNT(*) AS games
                 FROM ClutchStats cs
                 WHERE cs.team_id = %s
             ''', (team_id,))
-            clutch_row = cursor.fetchone()
-            if clutch_row and clutch_row.get('off_rating') is not None:
+            row = cursor.fetchone()
+            if row and row.get('off_rating') is not None:
                 situational['clutch'] = {
-                    'off_rating': clutch_row['off_rating'],
-                    'def_rating': clutch_row['def_rating'],
-                    'net_rating': clutch_row['net_rating'],
-                    'games': clutch_row['clutch_games']
+                    'off_rating': row['off_rating'],
+                    'def_rating': row['def_rating'],
+                    'net_rating': row['net_rating'],
+                    'games': row['games']
                 }
         except Exception:
             situational['clutch'] = None
 
-        # Quarter-by-quarter: try TeamQuarterStats
+        # Quarter-by-quarter: simple aggregation from TeamQuarterStats
         try:
             cursor.execute('''
                 SELECT
@@ -687,9 +681,9 @@ def get_situational_performance():
         except Exception:
             situational['by_quarter'] = None
 
-        # Close games: +/- in games decided by 5 points or less
+        # Close games: games decided by 5 points or less
         try:
-            close_query = '''
+            cursor.execute('''
                 SELECT
                     g.game_id,
                     g.game_date,
@@ -697,14 +691,14 @@ def get_situational_performance():
                     CASE WHEN g.home_team_id = %s THEN g.away_score ELSE g.home_score END AS opp_score
                 FROM Game g
                 WHERE (g.home_team_id = %s OR g.away_team_id = %s)
-                AND ABS(CASE WHEN g.home_team_id = %s THEN g.home_score - g.away_score ELSE g.away_score - g.home_score END) <= 5
+                AND ABS(g.home_score - g.away_score) <= 5
                 AND g.status = 'completed'
                 ORDER BY g.game_date DESC
                 LIMIT %s
-            '''
-            cursor.execute(close_query, (team_id, team_id, team_id, team_id, team_id, last_n_games))
-            close_games = cursor.fetchall()
-            situational['close_games'] = close_games
+            ''', (team_id, team_id, team_id, team_id, last_n_games))
+            close_rows = cursor.fetchall()
+            if close_rows:
+                situational['close_games'] = close_rows
         except Exception:
             situational['close_games'] = None
 
