@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import requests
@@ -5,63 +6,95 @@ from datetime import datetime
 import time
 import logging
 from modules.nav import SideBarLinks
+from modules import api_client
 
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="System Health - BallWatch",
+    page_title="System Health - Data Engineer",
     layout="wide"
 )
 
 SideBarLinks()
 
+col1, col2, col3 = st.columns([3, 1, 1])
+with col1:
+    st.title("System Health Dashboard — Data Engineer")
+    st.caption("Real-time system status and logs for operations teams.")
+
+# Use environment variable to configure API base URL
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = 'http://api:4000'
+    # Resolve using Home.py behavior
+    def _default_api_base():
+        env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
+        if env:
+            return env
+        try:
+            if os.path.exists('/.dockerenv'):
+                return 'http://api:4000'
+        except Exception:
+            pass
+        return 'http://localhost:4000'
+    st.session_state.api_base_url = _default_api_base()
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 
-def api_get(endpoint):
+
+def _parse_endpoint_with_query(endpoint: str):
+    import urllib.parse
+    parsed = urllib.parse.urlparse(endpoint)
+    path = parsed.path
+    qs = urllib.parse.parse_qs(parsed.query)
+    params = {k: v[0] for k, v in qs.items()}
+    return path, params
+
+
+def call_get_raw(endpoint: str, params=None, timeout=10):
     try:
-        full_url = f"{st.session_state.api_base_url}{endpoint}"
-        response = requests.get(full_url, timeout=10)
-        if response.status_code == 200:
+        path, p = _parse_endpoint_with_query(endpoint)
+        merged = {**(p or {}), **(params or {})}
+        full = f"{st.session_state.api_base_url}{path}"
+        response = requests.get(full, params=merged or None, timeout=timeout)
+        if response.status_code in (200, 201):
             return response.json()
         else:
             logger.error(f"API Error {response.status_code} for {endpoint}")
-            st.error(f"API Error: {response.status_code}")
             return None
     except requests.exceptions.ConnectionError:
         logger.error(f"Connection error for {endpoint}")
-        st.error("Cannot connect to server")
         return None
     except Exception as e:
         logger.error(f"Error for {endpoint}: {str(e)}")
-        st.error(f"Error: {str(e)}")
         return None
 
-def api_post(endpoint, data):
+
+def call_post_raw(endpoint: str, data=None, timeout=10):
     try:
-        full_url = f"{st.session_state.api_base_url}{endpoint}"
-        response = requests.post(
-            full_url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code in [200, 201]:
+        path, _ = _parse_endpoint_with_query(endpoint)
+        full = f"{st.session_state.api_base_url}{path}"
+        response = requests.post(full, json=data, timeout=timeout)
+        if response.status_code in (200, 201):
             return response.json()
         else:
             logger.error(f"API Error {response.status_code} for {endpoint}")
-            st.error(f"API Error: {response.status_code}")
             return None
     except requests.exceptions.ConnectionError:
         logger.error(f"Connection error for {endpoint}")
-        st.error("Cannot connect to server")
         return None
     except Exception as e:
         logger.error(f"Error for {endpoint}: {str(e)}")
-        st.error(f"Error: {str(e)}")
         return None
+
+
+# ensure api base is set consistently
+api_client.ensure_api_base()
+
+def api_get(endpoint):
+    return api_client.api_get(endpoint)
+
+
+def api_post(endpoint, data):
+    return api_client.api_post(endpoint, data)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
@@ -202,11 +235,6 @@ if error_data:
     if errors:
         df_errors = pd.DataFrame(errors)
         
-        # Debug: Check what columns we actually have
-        if st.session_state.get('debug_mode', False):
-            st.write("Available columns:", list(df_errors.columns))
-            st.write("Sample data:", df_errors.head(1).to_dict('records'))
-        
         df_errors['severity_display'] = df_errors['severity'].apply(
             lambda x: f"CRITICAL" if x == 'critical'
             else f"ERROR" if x == 'error'  
@@ -321,3 +349,8 @@ else:
         use_container_width=True,
         hide_index=True
     )
+
+try:
+    del st.session_state['debug_mode']
+except Exception:
+    pass

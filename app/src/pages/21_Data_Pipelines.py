@@ -1,82 +1,138 @@
+import os
 import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import logging
 from modules.nav import SideBarLinks
+from modules import api_client
 
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="Data Pipelines - BallWatch",
+    page_title="Data Pipelines - Data Engineer",
     layout="wide"
 )
 
 SideBarLinks()
 
+st.title("Data Pipelines — Data Engineer")
+st.caption("Monitor, manage, and troubleshoot data loads for the analytics platform.")
+
+# API base URL (supports env override)
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = 'http://api:4000'
+    def _default_api_base():
+        env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
+        if env:
+            return env
+        try:
+            if os.path.exists('/.dockerenv'):
+                return 'http://api:4000'
+        except Exception:
+            pass
+        return 'http://localhost:4000'
+    st.session_state.api_base_url = _default_api_base()
+
+# Replace local api helpers with centralized ones
 
 def api_get(endpoint):
-    """Make GET request to API"""
-    full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        response = requests.get(full_url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            if response.status_code == 404:
-                st.error(f"Endpoint not found: {endpoint}")
-            else:
-                st.error(f"Error {response.status_code}")
-            return None
+        return api_client.api_get(endpoint)
     except Exception as e:
         st.error(f"Connection error: {str(e)}")
         return None
 
 def api_post(endpoint, data):
-    """Make POST request to API"""
-    full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        response = requests.post(
-            full_url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            if response.status_code == 409:
-                st.error("A load of this type is already running")
-            else:
-                st.error(f"Error {response.status_code}: {response.text}")
-            return None
+        return api_client.api_post(endpoint, data)
     except Exception as e:
         st.error(f"Connection error: {str(e)}")
         return None
 
 def api_put(endpoint, data):
-    """Make PUT request to API"""
-    full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        response = requests.put(
-            full_url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            st.error(f"Error {response.status_code}: {response.text}")
-            return None
+        return api_client.api_put(endpoint, data)
     except Exception as e:
         st.error(f"Connection error: {str(e)}")
         return None
 
+def _parse_endpoint_with_query(endpoint: str):
+    import urllib.parse
+    from typing import Dict, Any
+    if not endpoint:
+        return endpoint, {}
+    parsed = urllib.parse.urlparse(endpoint)
+    path = parsed.path
+    qs = urllib.parse.parse_qs(parsed.query)
+    params = {k: v[0] for k, v in qs.items()}
+    return path, params
+
+
+def call_get_raw(endpoint: str, params=None, timeout=10):
+    try:
+        path, p = _parse_endpoint_with_query(endpoint)
+        merged = {**(p or {}), **(params or {})}
+        full = f"{st.session_state.api_base_url}{path}"
+        resp = requests.get(full, params=merged or None, timeout=timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.warning('GET %s returned %s', full, resp.status_code)
+        # Show details in UI when debug mode is active to help debugging
+        try:
+            if st.session_state.get('debug_mode', False):
+                st.error(f"GET {full} returned {resp.status_code}: {resp.text}")
+        except Exception:
+            # Avoid raising UI errors from logging
+            pass
+    except Exception as e:
+        logger.exception('Exception in call_get_raw(%s): %s', endpoint, e)
+    return None
+
+
+def call_post_raw(endpoint: str, data=None, timeout=10):
+    try:
+        path, _ = _parse_endpoint_with_query(endpoint)
+        full = f"{st.session_state.api_base_url}{path}"
+        resp = requests.post(full, json=data, timeout=timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.warning('POST %s returned %s', full, resp.status_code)
+        try:
+            if st.session_state.get('debug_mode', False):
+                st.error(f"POST {full} returned {resp.status_code}: {resp.text}")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.exception('Exception in call_post_raw(%s): %s', endpoint, e)
+    return None
+
+
+def call_put_raw(endpoint: str, data=None, timeout=10):
+    try:
+        path, _ = _parse_endpoint_with_query(endpoint)
+        full = f"{st.session_state.api_base_url}{path}"
+        resp = requests.put(full, json=data, timeout=timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.warning('PUT %s returned %s', full, resp.status_code)
+        try:
+            if st.session_state.get('debug_mode', False):
+                st.error(f"PUT {full} returned {resp.status_code}: {resp.text}")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.exception('Exception in call_put_raw(%s): %s', endpoint, e)
+    return None
+
+# Remove any remaining debug-mode conditional displays — this page no longer exposes a debug toggle
+try:
+    # drop any debug expanders left behind
+    del st.session_state['debug_mode']
+except Exception:
+    pass
+
 # Main Page
-st.title("Data Pipelines Management")
+st.header("Data Pipelines Management")
 st.markdown("Monitor and manage data loads for BallWatch analytics platform")
 
 # System Health Check

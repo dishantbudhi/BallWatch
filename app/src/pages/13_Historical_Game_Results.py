@@ -2,23 +2,26 @@
 import os
 import logging
 from datetime import date
-import requests
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 from modules.nav import SideBarLinks
+import requests
+import urllib.parse
+from typing import Optional, Dict, Any, Tuple
+from modules import api_client
+
+api_client.ensure_api_base()
+API_BASE = api_client.ensure_api_base()
 
 # -------------------------------------------------------------------
 # Page setup + Nav
 # -------------------------------------------------------------------
 logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Game Search & Box Scores", layout="wide")
-SideBarLinks()  # your shared sidebar nav/logo/auth
+SideBarLinks()  # shared sidebar/nav
 st.title("📅 Game Search & Box Scores")
-
-# If Streamlit runs in Docker next to the API use http://api:4000
-# If running on your host, set API_BASE_URL=http://localhost:4000
-BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
+st.caption("Search games by date, team, season, and view full box scores.")
 
 # ---------------- Session Defaults (keep results sticky) ----------------
 if "gs_search_active" not in st.session_state:
@@ -31,21 +34,36 @@ if "gs_last_filters" not in st.session_state:
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
-def api_get(path: str, params: dict | None = None):
-    try:
-        url = f"{BASE_URL}{path}"
-        r = requests.get(url, params=params, timeout=25)
-        if r.status_code in (200, 201):
-            return r.json()
-        st.error(f"API {r.status_code}: {r.text}")
-    except Exception as e:
-        st.error(f"Connection error: {e}")
-    return None
+def _parse_endpoint_with_query(endpoint: str) -> Tuple[str, Dict[str, Any]]:
+    if not endpoint:
+        return endpoint, {}
+    parsed = urllib.parse.urlparse(endpoint)
+    path = parsed.path
+    qs = urllib.parse.parse_qs(parsed.query)
+    params = {k: v[0] for k, v in qs.items()}
+    return path, params
+
+def call_get_raw(endpoint: str, params: Optional[Dict[str, Any]] = None, timeout=5):
+    return api_client.api_get(endpoint, params=params, timeout=timeout)
+
+def get_teams(timeout=5):
+    data = api_client.api_get('/basketball/teams', timeout=timeout)
+    if isinstance(data, dict) and 'teams' in data:
+        return data
+    return data
+
+
+def search_games(params: dict | None = None):
+    return api_client.api_get('/basketball/games', params=params)
+
+
+def get_game_details(game_id: int):
+    return api_client.api_get(f'/basketball/games/{int(game_id)}')
 
 @st.cache_data(ttl=300)
 def load_teams() -> pd.DataFrame:
     """Fetch teams for name-based selection."""
-    data = api_get("/basketball/teams", None)
+    data = get_teams()
     rows = data["teams"] if isinstance(data, dict) and "teams" in data else (data or [])
     df = pd.DataFrame(rows)
     # Expected columns: team_id, name, abrv, city ...
@@ -57,7 +75,7 @@ def load_teams() -> pd.DataFrame:
     return df
 
 @st.cache_data(ttl=180)
-def search_games(start_date: str | None, end_date: str | None,
+def search_games_wrapper(start_date: str | None, end_date: str | None,
                  season: str | None, game_type: str | None, status: str | None) -> dict | None:
     """We do NOT pass team_id here; we'll filter by team name client-side."""
     params = {}
@@ -66,11 +84,11 @@ def search_games(start_date: str | None, end_date: str | None,
     if season: params["season"] = season
     if game_type: params["game_type"] = game_type
     if status: params["status"] = status
-    return api_get("/basketball/games", params)
+    return search_games(params)
 
 @st.cache_data(ttl=180)
-def get_game_details(game_id: int) -> dict | None:
-    return api_get(f"/basketball/games/{game_id}")
+def get_game_details_wrapper(game_id: int) -> dict | None:
+    return get_game_details(game_id)
 
 def fmt_game_row(g: dict) -> str:
     gd = g.get("game_date") or g.get("date") or ""
@@ -161,7 +179,7 @@ if st.session_state.gs_search_active:
         status=status,
     )
 
-    payload = search_games(
+    payload = search_games_wrapper(
         start_date=start_date,
         end_date=end_date,
         season=season,
@@ -237,7 +255,7 @@ st.markdown("---")
 # -------------------------------------------------------------------
 selected_game_id = st.session_state.gs_selected_game_id
 if st.session_state.gs_search_active and selected_game_id:
-    details = get_game_details(selected_game_id)
+    details = get_game_details_wrapper(selected_game_id)
     if not details or "game_details" not in details:
         st.error("Failed to load game details.")
     else:
@@ -295,7 +313,7 @@ else:
 # Debug footer
 with st.expander("Debug Info"):
     st.write({
-        "BASE_URL": BASE_URL,
+        "players_path": "/basketball/players",
         "teams_path": "/basketball/teams",
         "games_path": "/basketball/games",
         "game_details_path": "/basketball/games/<id>",

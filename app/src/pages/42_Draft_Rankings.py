@@ -1,32 +1,43 @@
+import os
 import logging
 logger = logging.getLogger(__name__)
 
 import streamlit as st
 import requests
 from modules.nav import SideBarLinks
+from modules import api_client
 
-st.set_page_config(layout='wide')
+st.set_page_config(page_title='Draft Rankings - General Manager', layout='wide')
 SideBarLinks()
-st.title('Draft Rankings & Player Evaluations')
 
-BASE_URL = "http://api:4000"
+api_client.ensure_api_base()
+
+# Remove debug UI
+try:
+    del st.session_state['debug_mode']
+except Exception:
+    pass
+
+st.title('Draft Rankings & Player Evaluations — General Manager')
+st.caption('Maintain and update draft evaluations and rankings.')
+
+def get_draft_evaluations():
+    data = api_client.api_get('/strategy/draft-evaluations')
+    if isinstance(data, dict) and 'evaluations' in data:
+        return {'evaluations': data.get('evaluations', [])}
+    if isinstance(data, list):
+        return {'evaluations': data}
+    return {'evaluations': []}
+
+def update_evaluation(evaluation_id, data):
+    return api_client.api_put(f"/strategy/draft-evaluations/{evaluation_id}", data=data)
 
 def make_request(endpoint, method='GET', data=None):
-    try:
-        url = f"{BASE_URL}{endpoint}"
-        if method == 'GET':
-            response = requests.get(url)
-        elif method == 'PUT':
-            response = requests.put(url, json=data)
-        
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            st.error(f"API Error: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        st.error(f"Connection Error: {str(e)}")
-        return None
+    if endpoint.startswith('/strategy/draft-evaluations') and method == 'GET':
+        return get_draft_evaluations()
+    if endpoint.startswith('/strategy/draft-evaluations') and method == 'PUT':
+        return update_evaluation(endpoint.split('/')[-1], data)
+    return None
 
 st.header("Update Player Evaluation")
 

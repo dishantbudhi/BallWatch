@@ -42,10 +42,7 @@ def get_player_matchups():
 
         cursor = db.get_db().cursor()
 
-        # Use PlayerMatchup table (bridge) to find recorded matchups between two players.
-        # We build two SELECTs and UNION them so we capture when either player was listed as
-        # the offensive or defensive participant in the PlayerMatchup table, and normalize
-        # the output so player1 refers to the first player_id provided and player2 to the second.
+        # Existing matchup query (unchanged) - reuse to get matchup_games
         season_clause = ''
         matchup_query = '''
             SELECT
@@ -77,7 +74,6 @@ def get_player_matchups():
             WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s
         '''
 
-        # second select swaps offensive/defensive so player1 always maps to the first requested id
         matchup_query += '''
             UNION ALL
             SELECT
@@ -109,18 +105,14 @@ def get_player_matchups():
             WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s
         '''
 
-        # Build params: first SELECT expects (player1, player2), second SELECT expects (player2, player1)
         params = [player1_id, player2_id, player2_id, player1_id]
 
-        # Apply season filter to both SELECTs if provided
         if season:
             season_clause = ' AND g.season = %s'
-            # inject season filter into both WHEREs by replacing the trailing WHERE lines
             matchup_query = matchup_query.replace('\n        WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s\n        ', '\n        WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s' + season_clause + '\n        ')
             matchup_query = matchup_query.replace('\n            WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s\n        ', '\n            WHERE pm.offensive_player_id = %s AND pm.defensive_player_id = %s' + season_clause + '\n        ')
             params.extend([season, season])
 
-        # After UNION the table alias 'g' is out of scope for ORDER BY; use the unioned column name
         matchup_query += ' ORDER BY game_date DESC'
 
         cursor.execute(matchup_query, params)
@@ -136,6 +128,39 @@ def get_player_matchups():
             player1_avg_points = player2_avg_points = 0
             player1_wins = player2_wins = 0
 
+        # Compute simple offensive/defensive ratings and advantage indicators
+        try:
+            # Offensive rating: normalize avg points to a 0-100 scale (simple heuristic)
+            max_ref = max(player1_avg_points, player2_avg_points, 1)
+            player1_off_rating = round((player1_avg_points / max_ref) * 100, 1)
+            player2_off_rating = round((player2_avg_points / max_ref) * 100, 1)
+
+            # Defensive rating: invert opponent points allowed in matchup_games (best-effort)
+            # If we have defensive points for each player use them, otherwise approximate
+            player1_def_eff = 100 - player2_off_rating
+            player2_def_eff = 100 - player1_off_rating
+
+            # Advantage indicator with margin
+            margin = player1_avg_points - player2_avg_points
+            if abs(margin) < 1:
+                advantage = 'Even'
+            elif margin > 0:
+                advantage = 'Player1'
+            else:
+                advantage = 'Player2'
+
+            # Tactical recommendation
+            if advantage == 'Player1':
+                recommendation = f"Assign {player1_id} to the matchup; exploit scoring mismatch and run isolation looks for high-efficiency possessions."
+            elif advantage == 'Player2':
+                recommendation = f"Avoid giving {player2_id} wide-open opportunities; use help defense and double-team in pick-and-rolls."
+            else:
+                recommendation = "Matchup appears even — focus on limiting turnovers and contesting shots."
+        except Exception:
+            player1_off_rating = player2_off_rating = player1_def_eff = player2_def_eff = 0
+            advantage = 'Unknown'
+            recommendation = 'No recommendation available.'
+
         response_data = {
             'matchup_games': matchup_games,
             'total_matchups': len(matchup_games),
@@ -143,13 +168,19 @@ def get_player_matchups():
                 'player1': {
                     'id': player1_id,
                     'avg_points': round(player1_avg_points, 1),
-                    'head_to_head_wins': player1_wins
+                    'head_to_head_wins': player1_wins,
+                    'offensive_rating': player1_off_rating,
+                    'defensive_rating': player1_def_eff
                 },
                 'player2': {
                     'id': player2_id,
                     'avg_points': round(player2_avg_points, 1),
-                    'head_to_head_wins': player2_wins
-                }
+                    'head_to_head_wins': player2_wins,
+                    'offensive_rating': player2_off_rating,
+                    'defensive_rating': player2_def_eff
+                },
+                'advantage': advantage,
+                'recommendation': recommendation
             }
         }
 
@@ -303,6 +334,59 @@ def get_opponent_reports():
         else:
             avg_points_scored = avg_points_allowed = win_percentage = 0
 
+        # Attempt to compute shooting patterns and defensive weaknesses (best-effort, safe-fallback)
+        shooting_patterns = None
+        defensive_weaknesses = None
+        tactical_recommendations = []
+        try:
+            # Try to query aggregated team shooting stats if the table exists
+            cursor.execute('''
+                SELECT
+                    ROUND(AVG(ts.fg_pct),2) AS fg_pct,
+                    ROUND(AVG(ts.three_pt_pct),2) AS three_pt_pct,
+                    ROUND(AVG(ts.two_pt_pct),2) AS two_pt_pct,
+                    ROUND(AVG(ts.freethrow_pct),2) AS ft_pct,
+                    ROUND(AVG(ts.turnovers),1) AS turnovers
+                FROM TeamShootingStats ts
+                WHERE ts.team_id = %s
+                AND ts.game_date >= (SELECT MAX(game_date) - INTERVAL %s DAY FROM Game)
+            ''', (opponent_id, last_n_games))
+            shooting_row = cursor.fetchone()
+            if shooting_row and shooting_row.get('fg_pct') is not None:
+                shooting_patterns = {
+                    'fg_pct': float(shooting_row['fg_pct']),
+                    'three_pt_pct': float(shooting_row['three_pt_pct']),
+                    'two_pt_pct': float(shooting_row['two_pt_pct']),
+                    'ft_pct': float(shooting_row['ft_pct']),
+                    'turnovers': float(shooting_row['turnovers'])
+                }
+
+                # Simple defensive weakness rules
+                weaknesses = []
+                if shooting_patterns['three_pt_pct'] > 0.36:
+                    weaknesses.append('Defends the perimeter poorly (high 3P%).')
+                if shooting_patterns['turnovers'] > 12:
+                    weaknesses.append('Forces low turnovers but may be susceptible to transition.')
+                defensive_weaknesses = weaknesses
+
+            # Tactical recommendations derived from patterns and key players
+            if shooting_patterns:
+                if shooting_patterns['three_pt_pct'] > 0.36:
+                    tactical_recommendations.append('Close out aggressively on perimeter shooters; use contested closeouts in transition defense.')
+                if shooting_patterns['fg_pct'] < 0.44:
+                    tactical_recommendations.append('Focus on interior scoring and offensive rebound opportunities.')
+
+            # Add recommendations based on top player matchups
+            for kp in key_players:
+                if kp.get('avg_points', 0) >= 18:
+                    tactical_recommendations.append(f"Identify and double-team {kp['first_name']} {kp['last_name']} on catch-and-shoots.")
+
+        except Exception:
+            # If TeamShootingStats or columns are not present, skip and return limited data
+            shooting_patterns = None
+            defensive_weaknesses = None
+            tactical_recommendations.append('Insufficient granular shooting data; rely on film and player-level stats for final tactics.')
+
         response_data = {
             'opponent_info': opponent_info,
             'head_to_head_history': head_to_head,
@@ -313,7 +397,10 @@ def get_opponent_reports():
                 'win_percentage': round(win_percentage, 1),
                 'last_n_games': len(recent_games)
             },
-            'key_players': key_players
+            'key_players': key_players,
+            'shooting_patterns': shooting_patterns,
+            'defensive_weaknesses': defensive_weaknesses,
+            'tactical_recommendations': tactical_recommendations
         }
 
         current_app.logger.info(f'Successfully generated opponent report for team {opponent_id}')
@@ -526,3 +613,109 @@ def get_season_summaries():
     except Exception as e:
         current_app.logger.error(f'Error in get_season_summaries: {str(e)}')
         return make_response(jsonify({"error": "Failed to fetch season summary"}), 500)
+
+
+#------------------------------------------------------------
+# Get situational performance data [New Endpoint]
+@analytics.route('/situational-performance', methods=['GET'])
+def get_situational_performance():
+    """
+    Get situational team performance (clutch, quarter-by-quarter, close games).
+
+    Query params:
+      - team_id (required)
+      - season (optional)
+      - last_n_games (optional)
+
+    Returns:
+      JSON with best-effort situational aggregates. Falls back gracefully if play-by-play is not available.
+    """
+    try:
+        current_app.logger.info('GET /situational-performance handler started')
+        team_id = request.args.get('team_id', type=int)
+        season = request.args.get('season')
+        last_n_games = request.args.get('last_n_games', 20, type=int)
+
+        if not team_id:
+            return make_response(jsonify({"error": "team_id is required"}), 400)
+
+        cursor = db.get_db().cursor()
+
+        situational = {
+            'clutch': None,
+            'by_quarter': None,
+            'close_games': None
+        }
+
+        # Best-effort: try to query ClutchStats table if exists
+        try:
+            cursor.execute('''
+                SELECT
+                    ROUND(AVG(cs.off_rating),1) AS off_rating,
+                    ROUND(AVG(cs.def_rating),1) AS def_rating,
+                    ROUND(AVG(cs.net_rating),1) AS net_rating,
+                    COUNT(cs.game_id) AS clutch_games
+                FROM ClutchStats cs
+                WHERE cs.team_id = %s
+            ''', (team_id,))
+            clutch_row = cursor.fetchone()
+            if clutch_row and clutch_row.get('off_rating') is not None:
+                situational['clutch'] = {
+                    'off_rating': clutch_row['off_rating'],
+                    'def_rating': clutch_row['def_rating'],
+                    'net_rating': clutch_row['net_rating'],
+                    'games': clutch_row['clutch_games']
+                }
+        except Exception:
+            situational['clutch'] = None
+
+        # Quarter-by-quarter: try TeamQuarterStats
+        try:
+            cursor.execute('''
+                SELECT
+                    tq.quarter,
+                    ROUND(AVG(tq.points_for),1) AS avg_points_for,
+                    ROUND(AVG(tq.points_against),1) AS avg_points_against
+                FROM TeamQuarterStats tq
+                WHERE tq.team_id = %s
+                GROUP BY tq.quarter
+                ORDER BY tq.quarter
+            ''', (team_id,))
+            q_rows = cursor.fetchall()
+            if q_rows:
+                situational['by_quarter'] = q_rows
+        except Exception:
+            situational['by_quarter'] = None
+
+        # Close games: +/- in games decided by 5 points or less
+        try:
+            close_query = '''
+                SELECT
+                    g.game_id,
+                    g.game_date,
+                    CASE WHEN g.home_team_id = %s THEN g.home_score ELSE g.away_score END AS team_score,
+                    CASE WHEN g.home_team_id = %s THEN g.away_score ELSE g.home_score END AS opp_score
+                FROM Game g
+                WHERE (g.home_team_id = %s OR g.away_team_id = %s)
+                AND ABS(CASE WHEN g.home_team_id = %s THEN g.home_score - g.away_score ELSE g.away_score - g.home_score END) <= 5
+                AND g.status = 'completed'
+                ORDER BY g.game_date DESC
+                LIMIT %s
+            '''
+            cursor.execute(close_query, (team_id, team_id, team_id, team_id, team_id, last_n_games))
+            close_games = cursor.fetchall()
+            situational['close_games'] = close_games
+        except Exception:
+            situational['close_games'] = None
+
+        response = make_response(jsonify({
+            'team_id': team_id,
+            'season': season,
+            'situational': situational
+        }))
+        response.status_code = 200
+        return response
+
+    except Exception as e:
+        current_app.logger.error(f'Error in get_situational_performance: {str(e)}')
+        return make_response(jsonify({"error": "Failed to fetch situational performance"}), 500)

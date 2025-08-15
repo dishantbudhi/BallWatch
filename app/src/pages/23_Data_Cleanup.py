@@ -1,37 +1,58 @@
+import os
 import logging
 logger = logging.getLogger(__name__)
 
 import streamlit as st
-import requests
 from modules.nav import SideBarLinks
 from datetime import datetime, timedelta
+from modules import api_client
 
-st.set_page_config(layout='wide')
+# Ensure Streamlit page config is set before any other st.* calls
+st.set_page_config(page_title='Data Cleanup - Data Engineer', layout='wide')
+
+# Sidebar/navigation
 SideBarLinks()
-st.title('Data Logs Management')
 
-BASE_URL = "http://api:4000"
+st.title('Data Cleanup & Validation — Data Engineer')
+st.caption('Inspect and resolve data validation errors and schedule cleanup tasks.')
 
+# ensure session state has api_base_url
+api_client.ensure_api_base()
+
+
+def call_get_raw(endpoint: str, params=None, timeout=5):
+    return api_client.api_get(endpoint, params=params, timeout=timeout)
+
+
+def call_post_raw(endpoint: str, data=None, timeout=5):
+    return api_client.api_post(endpoint, data=data, timeout=timeout)
+
+
+def get_data_errors(params=None):
+    return call_get_raw('/system/data-errors', params)
+
+
+def get_cleanup_schedule():
+    return call_get_raw('/system/data-cleanup')
+
+
+def schedule_cleanup(data):
+    return call_post_raw('/system/data-cleanup', data)
+
+
+# High-level request dispatcher used by UI actions
 def make_request(endpoint, method='GET', data=None):
-    try:
-        url = f"{BASE_URL}{endpoint}"
+    if endpoint.startswith('/system/data-errors') and method == 'GET':
+        return get_data_errors(data)
+    if endpoint.startswith('/system/data-cleanup'):
         if method == 'GET':
-            response = requests.get(url)
-        elif method == 'POST':
-            response = requests.post(url, json=data)
-        elif method == 'PUT':
-            response = requests.put(url, json=data)
-        elif method == 'DELETE':
-            response = requests.delete(url)
-        
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            st.error(f"API Error: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        st.error(f"Connection Error: {str(e)}")
-        return None
+            return get_cleanup_schedule()
+        if method == 'POST':
+            return schedule_cleanup(data)
+    return None
+
+
+# --- Page UI ---
 
 tab1, tab2 = st.tabs(["Data Errors", "Data Cleanup"])
 
@@ -133,8 +154,10 @@ with tab2:
             data = make_request("/system/data-cleanup")
             
             if data:
+                # backend uses 'active_schedules' and may return 'recent_cleanup_history'
                 st.session_state['active_schedules'] = data.get('active_schedules', [])
-                st.session_state['cleanup_history'] = data.get('recent_history', [])
+                # support both possible keys for recent history for backward compatibility
+                st.session_state['cleanup_history'] = data.get('recent_history', data.get('recent_cleanup_history', []))
                 st.success("Cleanup data loaded successfully")
         
         if 'active_schedules' in st.session_state:
@@ -143,27 +166,28 @@ with tab2:
             if schedules:
                 st.write("**Active Cleanup Schedules:**")
                 for schedule in schedules:
-                    with st.expander(f"{schedule['cleanup_type']} - {schedule['frequency']}"):
+                    with st.expander(f"{schedule.get('cleanup_type', schedule.get('service_name', 'Unknown'))} - {schedule.get('frequency', schedule.get('message', 'N/A'))}"):
                         col1, col2 = st.columns(2)
                         
                         with col1:
-                            st.write(f"**Schedule ID:** {schedule['schedule_id']}")
-                            st.write(f"**Frequency:** {schedule['frequency']}")
-                            st.write(f"**Retention Days:** {schedule['retention_days']}")
+                            st.write(f"**Schedule ID:** {schedule.get('schedule_id', 'N/A')}")
+                            st.write(f"**Frequency:** {schedule.get('frequency', schedule.get('message', 'N/A'))}")
+                            st.write(f"**Retention Days:** {schedule.get('retention_days', 'N/A')}")
                             
                         with col2:
-                            st.write(f"**Next Run:** {schedule['next_run']}")
+                            st.write(f"**Next Run:** {schedule.get('next_run', schedule.get('last_run', 'N/A'))}")
                             st.write(f"**Last Run:** {schedule.get('last_run', 'Never')}")
-                            st.write(f"**Created By:** {schedule['created_by']}")
-        
+                            # created_by may be stored as user_id; fall back gracefully
+                            st.write(f"**Created By:** {schedule.get('created_by', schedule.get('user_id', 'N/A'))}")
+
         if 'cleanup_history' in st.session_state:
             history = st.session_state['cleanup_history']
             
             if history:
                 st.write("**Recent Cleanup History:**")
                 for item in history[:5]:
-                    status_text = "COMPLETED" if item['status'] == 'completed' else "FAILED"
-                    st.write(f"[{status_text}] {item['cleanup_type']} - {item['started_at']} - {item.get('records_deleted', 0)} records deleted")
+                    status_text = "COMPLETED" if item.get('status', '') == 'completed' else "FAILED"
+                    st.write(f"[{status_text}] {item.get('cleanup_type', item.get('service_name', 'Unknown'))} - {item.get('started_at', item.get('created_at', 'N/A'))} - {item.get('records_deleted', item.get('records_deleted', 0))} records deleted")
     
     with cleanup_tab2:
         st.subheader("Schedule New Cleanup")
@@ -195,3 +219,8 @@ with tab2:
                         st.rerun()
                 else:
                     st.error("Please fill in all required fields marked with *")
+
+try:
+    del st.session_state['debug_mode']
+except Exception:
+    pass

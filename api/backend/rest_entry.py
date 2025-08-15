@@ -19,10 +19,11 @@ from dotenv import load_dotenv
 from backend.db_connection import db
 
 # Basketball Analytics API Route Blueprints
-from backend.core.basketball_routes import basketball
+from backend.basketball.basketball_routes import basketball
 from backend.analytics.analytics_routes import analytics
 from backend.strategy.strategy_routes import strategy
 from backend.admin.admin_routes import admin
+from backend.auth.auth_routes import auth
 
 
 def create_app():
@@ -82,7 +83,8 @@ def _register_blueprints(app):
         (basketball, '/basketball', 'Core Basketball Operations (Players, Teams, Games)'),
         (analytics, '/analytics', 'Performance Analytics & Comparisons'),
         (strategy, '/strategy', 'Game Plans & Draft Evaluations'),
-        (admin, '/system', 'System Administration & Data Management')
+        (admin, '/system', 'System Administration & Data Management'),
+        (auth, '/auth', 'Authentication & User Management')
     ]
     
     for blueprint, prefix, description in blueprints:
