@@ -75,29 +75,33 @@ with tab1:
         days_filter = st.number_input("Days to look back", min_value=1, max_value=90, value=7, key="data_days")
     
     if st.button("Load Data Errors", key="load_data_errors"):
-        params = f"?days={days_filter}"
+        params = {'days': days_filter}
         if severity_filter != "All":
-            params += f"&severity={severity_filter}"
+            params['severity'] = severity_filter
         if service_filter != "All":
-            params += f"&service_name={service_filter}"
+            params['service_name'] = service_filter
         
-        endpoint = f"/system/data-errors{params}"
+        endpoint = f"/system/data-errors"
+        data = make_request(endpoint, method='GET', data=params)
         
-        data = make_request(endpoint)
-        
-        if data and 'errors' in data:
-            st.session_state['data_errors'] = data['errors']
-            st.success(f"Found {len(data['errors'])} data errors")
-            
-            # Add debug info
-            if st.session_state.get('debug_mode', False):
-                with st.expander("🔍 Debug: API Response"):
-                    st.write("**Full Response:**")
-                    st.json(data)
-                    if data['errors']:
-                        st.write("**Sample Error Record:**")
-                        st.json(data['errors'][0])
-    
+        # Support both 'errors' and 'data_errors' or top-level lists
+        errors_list = None
+        if data:
+            if isinstance(data, dict):
+                errors_list = data.get('errors') or data.get('data_errors') or data.get('error_logs') or None
+                if not errors_list:
+                    # try to find the first list value inside
+                    for v in data.values():
+                        if isinstance(v, list):
+                            errors_list = v
+                            break
+            elif isinstance(data, list):
+                errors_list = data
+
+            if errors_list is not None:
+                st.session_state['data_errors'] = errors_list
+                st.success(f"Found {len(errors_list)} data errors")
+
     # Update the display section:
     if 'data_errors' in st.session_state:
         errors = st.session_state['data_errors']
@@ -106,9 +110,9 @@ with tab1:
             st.write(f"**Showing {len(errors)} data validation errors:**")
             
             for error in errors:
-                error_id = error.get('data_error_id', 'N/A')
+                error_id = error.get('data_error_id') or error.get('log_id') or 'N/A'
                 severity = error.get('severity', 'unknown')
-                table_name = error.get('table_name', 'unknown')
+                table_name = error.get('table_name') or error.get('service_name') or 'unknown'
                 
                 # Use color coding for severity
                 severity_color = "🔴" if severity == "critical" else "🟡" if severity == "error" else "🟠"
@@ -117,24 +121,26 @@ with tab1:
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        st.write(f"**Service/Component:** {error.get('table_name', 'N/A')}")
-                        st.write(f"**Error Message:** {error.get('error_message', 'N/A')}")
-                        st.write(f"**Severity:** {error.get('severity', 'N/A').upper()}")
+                        st.write(f"**Service/Component:** {table_name}")
+                        st.write(f"**Error Message:** {error.get('error_message') or error.get('message') or 'N/A'}")
+                        st.write(f"**Severity:** {severity.upper()}")
                         st.write(f"**Records Processed:** {error.get('records_processed', 'N/A')}")
                         st.write(f"**Records Failed:** {error.get('records_failed', 'N/A')}")
                         
                     with col2:
-                        st.write(f"**Detected At:** {error.get('detected_at', 'N/A')}")
-                        resolved_status = "✅ Resolved" if error.get('resolved_at') else "❌ Unresolved"
+                        detected_at = error.get('detected_at') or error.get('created_at')
+                        resolved_at = error.get('resolved_at')
+                        st.write(f"**Detected At:** {detected_at}")
+                        resolved_status = "✅ Resolved" if resolved_at else "❌ Unresolved"
                         st.write(f"**Status:** {resolved_status}")
-                        if error.get('resolved_at'):
-                            st.write(f"**Resolved At:** {error.get('resolved_at', 'N/A')}")
+                        if resolved_at:
+                            st.write(f"**Resolved At:** {resolved_at}")
                             st.write(f"**Resolved By:** {error.get('resolved_by', 'N/A')}")
                         if error.get('resolution_notes'):
                             st.write(f"**Resolution Notes:** {error.get('resolution_notes', 'N/A')}")
                         
                         # Add action buttons for unresolved errors
-                        if not error.get('resolved_at'):
+                        if not resolved_at:
                             if st.button(f"Mark as Resolved", key=f"resolve_{error_id}"):
                                 st.info("Resolution functionality would go here")
         else:
@@ -219,8 +225,3 @@ with tab2:
                         st.rerun()
                 else:
                     st.error("Please fill in all required fields marked with *")
-
-try:
-    del st.session_state['debug_mode']
-except Exception:
-    pass

@@ -1,5 +1,20 @@
 USE BallWatch;
 
+DELETE FROM PlayerLineups;
+DELETE FROM PlayerMatchup;
+DELETE FROM PlayerGameStats;
+DELETE FROM TeamsPlayers;
+DELETE FROM SystemLogs;
+DELETE FROM GamePlans;
+DELETE FROM DraftEvaluations;
+DELETE FROM LineupConfiguration;
+DELETE FROM PlayerGameStats;
+DELETE FROM Users;
+DELETE FROM Game;
+DELETE FROM Players;
+DELETE FROM Agent;
+DELETE FROM Teams;
+
 -- 1. AGENT TABLE (40 rows)
 INSERT INTO Agent (first_name, last_name, agency_name, phone, email) VALUES
 ('Rich', 'Paul', 'Klutch Sports Group', '310-555-0101', 'rpaul@klutchsports.com'),

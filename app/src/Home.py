@@ -46,6 +46,17 @@ def _default_api_base():
 API_BASE = _default_api_base()
 logger.info('Using API_BASE=%s', API_BASE)
 
+# Ensure modules.api_client uses the same base URL stored in Streamlit session state
+try:
+    if 'api_base_url' not in st.session_state:
+        st.session_state['api_base_url'] = API_BASE
+except Exception:
+    pass
+
+# Default debug mode to False unless explicitly enabled
+if 'debug_mode' not in st.session_state:
+    st.session_state['debug_mode'] = False
+
 
 def _parse_endpoint_with_query(endpoint: str) -> Tuple[str, Dict[str, Any]]:
     """Split an endpoint that may include a query string into path and params dict."""
@@ -76,7 +87,10 @@ def call_get_raw(endpoint: str, params: Optional[Dict[str, Any]] = None, timeout
 def get_users_for_role(role, timeout=5):
     """Return a list of users for the given role by calling the backend API.
 
-    Uses centralized api_client.get_users to ensure consistent request behavior.
+    This function is tolerant to a variety of response shapes returned by different
+    backends (list of dicts, list of strings, dict wrappers, id->user maps, etc.)
+    and will normalize simple scalar lists into minimal user dictionaries so the
+    UI can render usable labels instead of forcing the manual debug fallback.
     """
     try:
         alias_map = {
@@ -87,42 +101,62 @@ def get_users_for_role(role, timeout=5):
         }
 
         def _extract_users_from_json(data):
+            """Normalize various JSON shapes into a list of user dicts or return None."""
             if not data:
                 return None
-            # if data is a dict wrapper like {'users': [...]}
+
+            # If it's already a list
+            if isinstance(data, list):
+                # list of dicts -> good
+                if all(isinstance(i, dict) for i in data):
+                    return data
+                # list of scalars (e.g. ['alice','bob']) -> convert to user dicts
+                if all(not isinstance(i, dict) for i in data):
+                    out = []
+                    for idx, val in enumerate(data):
+                        out.append({'username': str(val), 'id': idx})
+                    return out
+                return None
+
+            # If it's a dict, try common wrapper keys first
             if isinstance(data, dict):
-                # try common keys
                 for key in ('users', 'results', 'items', 'records', 'data'):
                     val = None
-                    # case-insensitive access
                     for k, v in data.items():
                         if k.lower() == key:
                             val = v
                             break
                     if val is not None:
-                        if isinstance(val, list) and all(isinstance(i, dict) for i in val):
-                            return val
+                        # If the wrapped value is a list, normalize it
+                        if isinstance(val, list):
+                            if all(isinstance(i, dict) for i in val):
+                                return val
+                            # list of scalars inside wrapper
+                            out = []
+                            for idx, item in enumerate(val):
+                                if isinstance(item, dict):
+                                    out.append(item)
+                                else:
+                                    out.append({'username': str(item), 'id': idx})
+                            return out
+                        # If the wrapper value is a dict that itself maps ids->user
                         if isinstance(val, dict):
-                            # nested dict might contain the list
-                            for nk, nv in val.items():
-                                if nk.lower() in ('users', 'results', 'items') and isinstance(nv, list) and all(isinstance(i, dict) for i in nv):
-                                    return nv
-                # scan values
-                for v in data.values():
-                    if isinstance(v, list) and all(isinstance(i, dict) for i in v):
-                        return v
-                    if isinstance(v, dict):
-                        for vv in v.values():
-                            if isinstance(vv, list) and all(isinstance(i, dict) for i in vv):
-                                return vv
-                # id->user map
+                            dict_vals = [v2 for v2 in val.values() if isinstance(v2, dict)]
+                            if dict_vals:
+                                return dict_vals
+
+                # If the top-level dict looks like id->user map or username->user map
                 dict_vals = [v for v in data.values() if isinstance(v, dict)]
                 if dict_vals and all(('username' in v or 'user_id' in v or 'id' in v) for v in dict_vals):
                     return dict_vals
-                return None
-            elif isinstance(data, list):
-                if all(isinstance(i, dict) for i in data):
-                    return data
+
+                # If the dict maps simple scalars (e.g. {'alice': 'Alice Smith'}) treat keys as usernames
+                if all(not isinstance(v, (dict, list)) for v in data.values()):
+                    out = []
+                    for k, v in data.items():
+                        out.append({'username': str(k), 'display': str(v)})
+                    return out
+
             return None
 
         candidates = [role]
@@ -149,7 +183,7 @@ def get_users_for_role(role, timeout=5):
             except Exception:
                 logger.exception('Exception while fetching users for role %s', c)
 
-        # Final fallback: fetch all users and filter client-side
+        # Final fallback: fetch all users and filter client-side (more permissive)
         try:
             data = get_users(timeout=timeout)
             if not data:
@@ -160,8 +194,19 @@ def get_users_for_role(role, timeout=5):
                 if role in alias_map:
                     acceptable.add(alias_map[role])
                 acceptable = {v.lower() for v in acceptable if v}
-                filtered = [u for u in users if (u.get('role') or '').lower() in acceptable]
-                return filtered
+
+                filtered = []
+                for u in users:
+                    r = ''
+                    try:
+                        r = (u.get('role') or u.get('user_role') or u.get('type') or '')
+                    except Exception:
+                        r = ''
+                    if isinstance(r, str) and r.lower() in acceptable:
+                        filtered.append(u)
+
+                # If filtering produced results, return them; otherwise, return the normalized users
+                return filtered if filtered else users
         except Exception:
             logger.exception('Exception while fetching all users for fallback')
 
@@ -248,17 +293,8 @@ st.set_page_config(layout = 'wide')
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
-# Enable debug_mode by default to help surface raw API responses when troubleshooting
-# (change to False in production or remove once debugging is complete)
-if 'debug_mode' not in st.session_state:
-    st.session_state['debug_mode'] = True
-
-# show a small debug banner when enabled so the page renders and it's obvious
-try:
-    if st.session_state.get('debug_mode'):
-        st.info('Debug mode: ON — API responses will be shown for troubleshooting')
-except Exception:
-    pass
+# Remove debug mode defaults and banners (production-safe)
+# Debug UI removed; use server logs for troubleshooting
 
 # Use the SideBarLinks function from src/modules/nav.py to control
 # the links displayed on the left-side panel. 
@@ -462,19 +498,81 @@ def fetch_users_for_role(role):
         return users
 
     # no users found — capture more information from the underlying API for debugging
+    raw = None
+    status_hint = ''
+    direct_info = None
     try:
         logger.info('No users returned for role=%s from get_users_for_role; fetching raw api response...', role)
-        raw = get_users(role=role, timeout=5)
-        logger.info('Raw get_users response for role=%s: %s', role, raw)
-        # If developer enabled debug_mode in session_state, surface the raw response in the UI
-        if st.session_state.get('debug_mode'):
+        # First, try the existing api_client.get_users() (may be None)
+        try:
+            raw = get_users(role=role, timeout=5)
+            logger.info('Raw get_users response for role=%s: %s', role, raw)
+            logger.debug('get_users raw response for role=%s: %s', role, raw)
+        except Exception as e:
+            logger.exception('Exception calling api_client.get_users for role %s: %s', role, e)
+            raw = f'Exception while calling api_client.get_users: {e}'
+
+        # Next, attempt a direct HTTP GET so we can capture status code and body for diagnostics
+        try:
+            base = st.session_state.get('api_base_url') or API_BASE
+            direct_url = f"{base.rstrip('/')}/auth/users"
+            params = {'role': role} if role else None
+            logger.info('Attempting direct GET %s with params=%s', direct_url, params)
+            resp = requests.get(direct_url, params=params, timeout=5)
             try:
-                st.error(f"Debug: get_users raw response for role={role}: {raw}")
+                # try to parse JSON, fall back to text
+                parsed = resp.json()
             except Exception:
-                # avoid raising during UI rendering
-                pass
+                parsed = resp.text
+            direct_info = {'status_code': resp.status_code, 'body': parsed}
+            logger.info('Direct GET %s returned %s', direct_url, direct_info)
+        except Exception as e:
+            logger.exception('Direct HTTP fetch to API failed: %s', e)
+            direct_info = {'exception': repr(e)}
+
     except Exception as e:
         logger.exception('Exception while fetching raw users for role %s: %s', role, e)
+        raw = f'Exception: {e}'
+
+    # Provide production-friendly UI guidance with an opt-in diagnostics expander
+    try:
+        # Avoid showing debug data unless explicitly requested via debug_mode or the user expands the details
+        st.error('No users available for this role. Please contact your system administrator.')
+
+        exp_key = f"users_diag_{role}"
+        with st.expander('Diagnostics (click to view)', expanded=False):
+            try:
+                st.markdown(f"**API Base:** `{st.session_state.get('api_base_url')}`")
+            except Exception:
+                pass
+            try:
+                st.markdown('**Raw /auth/users response (api_client.get_users):**')
+                st.write(raw)
+            except Exception:
+                st.write(repr(raw))
+
+            try:
+                st.markdown('**Direct HTTP fetch to /auth/users:**')
+                st.write(direct_info)
+            except Exception:
+                st.write(repr(direct_info))
+
+            # If debug_mode is enabled, show a helpful cURL to reproduce the request
+            try:
+                if st.session_state.get('debug_mode', False):
+                    base = st.session_state.get('api_base_url') or API_BASE
+                    curl = f"curl -s -X GET '{base.rstrip('/')}/auth/users?role={role}'"
+                    st.code(curl, language='bash')
+            except Exception:
+                pass
+
+            # Provide a retry control (unique per role)
+            retry_key = f"diag_retry_{role}"
+            if st.button('Retry fetch', key=retry_key):
+                _safe_rerun()
+    except Exception:
+        # If Streamlit UI calls fail for any reason, just log and continue
+        logger.exception('Failed to render diagnostics UI for role %s', role)
 
     return []
 
@@ -513,19 +611,28 @@ def _render_persona(title, opts):
                 else:
                     st.error('Please select a user before logging in')
     else:
-        # show a friendly fallback so the persona card still renders and is usable
-        st.warning('No users found for this role. You can enter a username to continue (debug mode)')
-        cols = st.columns([3,1])
-        with cols[0]:
-            manual_key = f"manual_{opts['role']}"
-            manual = st.text_input('Enter a username to continue', key=manual_key, value='')
-        with cols[1]:
-            cont_key = f"continue_{opts['role']}"
-            if st.button('Continue', key=cont_key):
-                if manual and manual.strip():
-                    _complete_login_from_input(opts['role'], manual, opts)
-                else:
-                    st.error('Please enter a username to continue')
+        # No users returned from API.
+        # In production we must not surface a debug login path.
+        if st.session_state.get('debug_mode', False):
+            st.warning('No users found for this role. You can enter a username to continue (debug mode)')
+            cols = st.columns([3,1])
+            with cols[0]:
+                manual_key = f"manual_{opts['role']}"
+                manual = st.text_input('Enter a username to continue', key=manual_key, value='')
+            with cols[1]:
+                cont_key = f"continue_{opts['role']}"
+                if st.button('Continue', key=cont_key):
+                    if manual and manual.strip():
+                        _complete_login_from_input(opts['role'], manual, opts)
+                    else:
+                        st.error('Please enter a username to continue')
+        else:
+            # Production behavior: show clear error, do not allow manual bypass.
+            st.error('No users available for this role. Please contact your system administrator.')
+            # Provide an explicit retry control for the user to attempt fetching again.
+            retry_key = f"retry_{opts['role']}"
+            if st.button('Retry', key=retry_key):
+                _safe_rerun()
 
     # small spacing between personas
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)

@@ -34,7 +34,13 @@ def get_teams(timeout=5):
     return []
 
 def get_opponent_report(endpoint_or_query: str):
-    path, params = _parse_endpoint_with_query(endpoint_or_query)
+    try:
+        path, params = api_client._parse_endpoint_with_query(endpoint_or_query)
+    except Exception:
+        parsed = urllib.parse.urlparse(endpoint_or_query)
+        path = parsed.path
+        qs = urllib.parse.parse_qs(parsed.query)
+        params = {k: v[0] for k, v in qs.items()}
     return call_get_raw(path or '/analytics/opponent-reports', params)
 
 
@@ -43,7 +49,13 @@ def create_game_plan(data: Dict[str, Any]):
 
 
 def get_game_plans_from_query(endpoint_or_query: str):
-    path, params = _parse_endpoint_with_query(endpoint_or_query)
+    try:
+        path, params = api_client._parse_endpoint_with_query(endpoint_or_query)
+    except Exception:
+        parsed = urllib.parse.urlparse(endpoint_or_query)
+        path = parsed.path
+        qs = urllib.parse.parse_qs(parsed.query)
+        params = {k: v[0] for k, v in qs.items()}
     return call_get_raw(path or '/strategy/game-plans', params)
 
 
@@ -257,7 +269,9 @@ with tab2:
                     if not plans:
                         try:
                             import requests as _req
-                            raw = _req.get(f"{API_BASE}/strategy/game-plans?team_id={team_id}")
+                            base = api_client.ensure_api_base()
+                            raw = _req.get(f"{base}/strategy/game-plans?team_id={team_id}")
+                            
                             st.error(f"Failed to load plans — status {raw.status_code}")
                             with st.expander('Raw server response'):
                                 st.text(raw.text)
@@ -276,14 +290,3 @@ with tab2:
                                     upd = make_request(f"/strategy/game-plans/{gp.get('plan_id')}", method='PUT', data=gp_payload)
                                     if upd:
                                         st.success('Plan activated')
-
-# provide _parse_endpoint_with_query using api_client helper if available
-try:
-    _parse_endpoint_with_query = api_client._parse_endpoint_with_query
-except Exception:
-    def _parse_endpoint_with_query(endpoint: str):
-        parsed = urllib.parse.urlparse(endpoint)
-        path = parsed.path
-        qs = urllib.parse.parse_qs(parsed.query)
-        params = {k: v[0] for k, v in qs.items()}
-        return path, params

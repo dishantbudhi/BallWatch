@@ -168,22 +168,52 @@ if health_data:
     st.subheader("System Metrics")
     
     metrics = health_data.get('system_metrics', {})
-    if metrics:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Players", f"{metrics.get('total_players', 0):,}")
-        with col2:
-            st.metric("Total Teams", metrics.get('total_teams', 0))
-        with col3:
-            st.metric("Total Games", f"{metrics.get('total_games', 0):,}")
-        with col4:
-            st.metric("Total Users", metrics.get('total_users', 0))
+    # support both dict and list shapes returned from different backends
+    if isinstance(metrics, dict):
+        total_players = metrics.get('total_players') or metrics.get('players') or 0
+        total_teams = metrics.get('total_teams') or metrics.get('teams') or 0
+        total_games = metrics.get('total_games') or metrics.get('games') or 0
+        total_users = metrics.get('total_users') or metrics.get('users') or 0
+    elif isinstance(metrics, list) and len(metrics) > 0:
+        m = metrics[0]
+        total_players = m.get('total_players') or 0
+        total_teams = m.get('total_teams') or 0
+        total_games = m.get('total_games') or 0
+        total_users = m.get('total_users') or 0
+    else:
+        total_players = total_teams = total_games = total_users = 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Players", f"{int(total_players):,}")
+    with col2:
+        st.metric("Total Teams", int(total_teams))
+    with col3:
+        st.metric("Total Games", f"{int(total_games):,}")
+    with col4:
+        st.metric("Total Users", int(total_users))
     
     last_load = health_data.get('last_successful_load')
+    # handle multiple possible shapes for last_successful_load
     if last_load:
-        st.success(f"Last successful load: **{last_load.get('load_type', 'Unknown')}** (ID: {last_load.get('load_id', 'N/A')})")
-        st.caption(f"Completed at: {last_load.get('completed_at', 'Unknown')}")
+        if isinstance(last_load, dict):
+            load_type = last_load.get('load_type') or last_load.get('service_name') or 'Unknown'
+            load_id = last_load.get('load_id') or last_load.get('log_id') or 'N/A'
+            completed_at = last_load.get('completed_at') or last_load.get('resolved_at') or last_load.get('created_at')
+        elif isinstance(last_load, list) and len(last_load) > 0:
+            l0 = last_load[0]
+            load_type = l0.get('load_type') or l0.get('service_name') or 'Unknown'
+            load_id = l0.get('load_id') or l0.get('log_id') or 'N/A'
+            completed_at = l0.get('completed_at') or l0.get('resolved_at') or l0.get('created_at')
+        else:
+            load_type = 'Unknown'
+            load_id = 'N/A'
+            completed_at = None
+
+        st.success(f"Last successful load: **{load_type}** (ID: {load_id})")
+        if completed_at:
+            st.caption(f"Completed at: {completed_at}")
     
 else:
     st.warning("Unable to connect to system health API. Showing mock data for demonstration.")
@@ -230,7 +260,7 @@ elif resolved_filter == "Unresolved":
 error_data = api_get(endpoint)
 
 if error_data:
-    errors = error_data.get('error_logs', [])
+    errors = error_data.get('error_logs') or error_data.get('errors') or []
     
     if errors:
         df_errors = pd.DataFrame(errors)
@@ -309,7 +339,7 @@ if error_data:
                 resolution_rate = (resolved / len(df_errors)) * 100
                 st.metric("Resolution Rate", f"{resolution_rate:.1f}%")
     else:
-        st.success("No errors found in the specified time period.")
+        st.warning("No errors found in the specified time period.")
 
 else:
     st.warning("Unable to fetch error logs. Showing sample data.")
@@ -349,8 +379,3 @@ else:
         use_container_width=True,
         hide_index=True
     )
-
-try:
-    del st.session_state['debug_mode']
-except Exception:
-    pass

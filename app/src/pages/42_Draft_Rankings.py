@@ -12,11 +12,7 @@ SideBarLinks()
 
 api_client.ensure_api_base()
 
-# Remove debug UI
-try:
-    del st.session_state['debug_mode']
-except Exception:
-    pass
+# Debug mode removed
 
 st.title('Draft Rankings & Player Evaluations — General Manager')
 st.caption('Maintain and update draft evaluations and rankings.')

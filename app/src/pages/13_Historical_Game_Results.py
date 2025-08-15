@@ -280,8 +280,80 @@ if st.session_state.gs_search_active and selected_game_id:
                 df["player_name"] = (df["first_name"].astype(str) + " " + df["last_name"].astype(str)).str.strip()
             return df
 
-        home_df = norm_df(details.get("home_team_stats"))
-        away_df = norm_df(details.get("away_team_stats"))
+        # Backend may return different shapes; support several common keys and fallback grouping
+        raw_home = details.get("home_team_stats")
+        raw_away = details.get("away_team_stats")
+        # collect any generic player-stats list present
+        candidate_stats = None
+        for key in ("player_stats", "player_game_stats", "players", "stats"):
+            if key in details and details.get(key):
+                candidate_stats = details.get(key)
+                break
+
+        # If home/away lists are missing but a flat player-stats list exists, group by team
+        if (not raw_home or not raw_away) and candidate_stats:
+            try:
+                all_stats = candidate_stats or []
+                # coerce ids and names
+                try:
+                    home_id = int(g.get('home_team_id')) if g.get('home_team_id') is not None else None
+                except Exception:
+                    home_id = None
+                try:
+                    away_id = int(g.get('away_team_id')) if g.get('away_team_id') is not None else None
+                except Exception:
+                    away_id = None
+
+                home_name = (g.get('home_team_name') or "").strip().lower()
+                away_name = (g.get('away_team_name') or "").strip().lower()
+
+                grouped_home = []
+                grouped_away = []
+                for s in all_stats:
+                    # team id match preferred
+                    try:
+                        tid = s.get('team_id')
+                        if tid is not None:
+                            if home_id is not None and int(tid) == home_id:
+                                grouped_home.append(s); continue
+                            if away_id is not None and int(tid) == away_id:
+                                grouped_away.append(s); continue
+                    except Exception:
+                        pass
+                    # fallback to team_name match
+                    tname = (s.get('team_name') or s.get('team') or "").strip().lower()
+                    if tname and home_name and tname == home_name:
+                        grouped_home.append(s)
+                    elif tname and away_name and tname == away_name:
+                        grouped_away.append(s)
+
+                # Use grouped lists if we found any
+                if grouped_home and not raw_home:
+                    raw_home = grouped_home
+                if grouped_away and not raw_away:
+                    raw_away = grouped_away
+            except Exception:
+                # if grouping fails, fall back to empty lists
+                raw_home = raw_home or []
+                raw_away = raw_away or []
+
+        home_df = norm_df(raw_home)
+        away_df = norm_df(raw_away)
+
+        # If the backend returned a flat player-stats list but not separated home/away lists,
+        # present a combined table so the UI is not empty.
+        if (home_df.empty or away_df.empty):
+            flat_candidates = details.get('player_stats') or details.get('player_game_stats') or details.get('players') or details.get('stats')
+            if flat_candidates:
+                try:
+                    combined = norm_df(flat_candidates)
+                    if not combined.empty:
+                        st.warning('Team-specific box scores not available; showing all player stats returned by the API for this game.')
+                        display_cols = [c for c in ["player_name", "team_name", "position", "points", "rebounds", "assists", "steals", "blocks", "turnovers", "minutes_played"] if c in combined.columns]
+                        st.dataframe(combined[display_cols], use_container_width=True, hide_index=True)
+                        # keep normal home/away as empty DataFrames for downstream charts
+                except Exception:
+                    pass
 
         st.subheader("Player Box Scores")
         c_home, c_away = st.columns(2)
@@ -309,15 +381,3 @@ if st.session_state.gs_search_active and selected_game_id:
             st.plotly_chart(afig, use_container_width=True)
 else:
     st.info("Pick one or two Team Names and set any date/season filters, then press **Search Games**. Select a game to view full box scores.")
-
-# Debug footer
-with st.expander("Debug Info"):
-    st.write({
-        "players_path": "/basketball/players",
-        "teams_path": "/basketball/teams",
-        "games_path": "/basketball/games",
-        "game_details_path": "/basketball/games/<id>",
-        "search_active": st.session_state.gs_search_active,
-        "selected_game_id": st.session_state.gs_selected_game_id,
-        "filters": st.session_state.gs_last_filters,
-    })

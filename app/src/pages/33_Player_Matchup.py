@@ -15,13 +15,15 @@ def call_get_raw(endpoint: str, params: dict | None = None, timeout=5):
 
 
 def get_players(params: dict | None = None):
-    data = api_client.api_get('/basketball/players', params=params)
-    if isinstance(data, dict) and 'players' in data:
-        return data.get('players', [])
-    if isinstance(data, list):
-        return data
-    return []
-
+    try:
+        return api_client.get_players(params=params)
+    except Exception:
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
 
 def get_player_matchup(endpoint_or_query: str):
     path, params = api_client._parse_endpoint_with_query(endpoint_or_query)

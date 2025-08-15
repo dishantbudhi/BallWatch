@@ -16,11 +16,7 @@ SideBarLinks()
 
 api_client.ensure_api_base()
 
-# Remove the debug checkbox UI
-try:
-    del st.session_state['debug_mode']
-except Exception:
-    pass
+# Debug mode removed
 
 st.title('Player Progress & Development — General Manager')
 st.caption('Track player development, evaluations, and generate development plans.')
@@ -38,12 +34,15 @@ def call_put_raw(endpoint: str, data=None, timeout=10):
 
 
 def get_players(params: dict | None = None):
-    data = api_client.api_get('/basketball/players', params=params)
-    if isinstance(data, dict) and 'players' in data:
-        return data.get('players', [])
-    if isinstance(data, list):
-        return data
-    return []
+    try:
+        return api_client.get_players(params=params)
+    except Exception:
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
 
 def make_request(endpoint, method='GET', data=None):
     # Call backend endpoints directly so this helper can be used anywhere in the file

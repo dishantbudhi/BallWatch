@@ -19,19 +19,53 @@ def call_get_raw(endpoint: str, params: dict | None = None, timeout=5):
 def get_teams(timeout=5):
     data = api_client.api_get('/basketball/teams', timeout=timeout)
     if isinstance(data, dict) and 'teams' in data:
-        return data.get('teams', [])
-    if isinstance(data, list):
-        return data
-    return []
+        teams = data.get('teams', []) or []
+    elif isinstance(data, list):
+        teams = data or []
+    else:
+        teams = []
+
+    # deduplicate by team_id
+    seen = set()
+    unique = []
+    for t in teams:
+        tid = t.get('team_id') or t.get('id')
+        if tid is None:
+            unique.append(t)
+            continue
+        try:
+            key = int(tid)
+        except Exception:
+            key = str(tid)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(t)
+    return unique
 
 
 def get_lineup_configurations(endpoint_or_query: str):
-    path, params = api_client._parse_endpoint_with_query(endpoint_or_query)
+    try:
+        path, params = api_client._parse_endpoint_with_query(endpoint_or_query)
+    except Exception:
+        # fallback implementation
+        import urllib.parse
+        parsed = urllib.parse.urlparse(endpoint_or_query)
+        path = parsed.path
+        qs = urllib.parse.parse_qs(parsed.query)
+        params = {k: v[0] for k, v in qs.items()}
     return call_get_raw(path or '/analytics/lineup-configurations', params)
 
 
 def get_situational_performance(endpoint_or_query: str):
-    path, params = api_client._parse_endpoint_with_query(endpoint_or_query)
+    try:
+        path, params = api_client._parse_endpoint_with_query(endpoint_or_query)
+    except Exception:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(endpoint_or_query)
+        path = parsed.path
+        qs = urllib.parse.parse_qs(parsed.query)
+        params = {k: v[0] for k, v in qs.items()}
     return call_get_raw(path or '/analytics/situational-performance', params)
 
 st.set_page_config(page_title='Lineup & Situational - Head Coach', layout='wide')

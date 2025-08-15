@@ -40,12 +40,17 @@ def get_teams(timeout=5):
 
 
 def get_players(params: dict | None = None):
-    data = api_client.api_get('/basketball/players', params=params)
-    if isinstance(data, dict) and 'players' in data:
-        return data.get('players', [])
-    if isinstance(data, list):
-        return data
-    return []
+    """Use centralized api_client.get_players (deduplicated) to avoid duplicate implementations."""
+    try:
+        return api_client.get_players(params=params)
+    except Exception:
+        # fallback to original behavior if api_client helper is unavailable
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
 
 
 def get_player_stats(player_id: int):
@@ -285,15 +290,3 @@ if st.session_state.search_active:
     st.dataframe(df_sorted[present_cols], use_container_width=True, hide_index=True)
 else:
     st.info("Set filters above and click **Search Players**.")
-
-# Optional: debug footer
-with st.expander("Debug Info"):
-    st.write({
-        "BASE_URL": BASE_URL,
-        "players_path": "/basketball/players",
-        "teams_path": "/basketball/teams",
-        "stats_path": "/basketball/players/<id>/stats",
-        "team_name_entered": team_name,
-        "search_active": st.session_state.search_active,
-        "filters": st.session_state.last_filters_pf,
-    })

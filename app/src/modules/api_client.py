@@ -101,3 +101,53 @@ def assign_team(user_id, team_id, timeout=10):
     Returns parsed JSON body on success or None.
     """
     return api_put(f'/auth/users/{user_id}/assign-team', data={'team_id': team_id}, timeout=timeout)
+
+
+def dedupe_by_id(items, id_keys=('player_id', 'id')):
+    """Return a new list with duplicates removed based on one of the provided id_keys.
+
+    Preserves original order. Items that are not dicts are returned unchanged.
+    If an item has none of the id_keys set, it will be included (can't dedupe).
+    """
+    if not items:
+        return []
+    seen = set()
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            out.append(it)
+            continue
+        pid = None
+        for k in id_keys:
+            if k in it and it.get(k) is not None:
+                pid = it.get(k)
+                break
+        if pid is None:
+            out.append(it)
+            continue
+        try:
+            key = int(pid)
+        except Exception:
+            key = str(pid)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
+def get_players(params=None, timeout=10):
+    """Fetch players from the API and return a deduplicated list.
+
+    This is a convenience wrapper that normalizes the various response shapes
+    (list or dict with 'players') and removes duplicates by player_id or id.
+    """
+    data = api_get('/basketball/players', params=params, timeout=timeout)
+    if isinstance(data, dict) and 'players' in data:
+        players = data.get('players', []) or []
+    elif isinstance(data, list):
+        players = data or []
+    else:
+        players = []
+
+    return dedupe_by_id(players, id_keys=('player_id', 'id'))

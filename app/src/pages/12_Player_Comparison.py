@@ -42,12 +42,15 @@ def get_teams(timeout=5):
 
 
 def get_players(params: dict | None = None):
-    data = api_client.api_get('/basketball/players', params=params)
-    if isinstance(data, dict) and 'players' in data:
-        return data.get('players', [])
-    if isinstance(data, list):
-        return data
-    return []
+    try:
+        return api_client.get_players(params=params)
+    except Exception:
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
 
 
 def get_player_stats(player_id: int):
@@ -310,13 +313,3 @@ if st.session_state.compare and p1_id and p2_id:
 
 else:
     st.info("Choose two players above and press **Compare Players** to view stats, trends, and box scores.")
-
-# Debug
-with st.expander("Debug Info"):
-    st.write({
-        "players_path": "/basketball/players",
-        "stats_path": "/basketball/players/<id>/stats",
-        "team_name_entered": team_name_filter,
-        "search_active": st.session_state.compare,
-        "filters": st.session_state.last_filters,
-    })
