@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import requests
@@ -5,63 +6,95 @@ from datetime import datetime
 import time
 import logging
 from modules.nav import SideBarLinks
+from modules import api_client
 
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="System Health - BallWatch",
+    page_title="System Health - Data Engineer",
     layout="wide"
 )
 
 SideBarLinks()
 
+col1, col2, col3 = st.columns([3, 1, 1])
+with col1:
+    st.title("System Health Dashboard — Data Engineer")
+    st.caption("Real-time system status and logs for operations teams.")
+
+# Use environment variable to configure API base URL
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = 'http://api:4000'
+    # Resolve using Home.py behavior
+    def _default_api_base():
+        env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
+        if env:
+            return env
+        try:
+            if os.path.exists('/.dockerenv'):
+                return 'http://api:4000'
+        except Exception:
+            pass
+        return 'http://localhost:4000'
+    st.session_state.api_base_url = _default_api_base()
 if 'auto_refresh' not in st.session_state:
     st.session_state.auto_refresh = False
 
-def api_get(endpoint):
+
+def _parse_endpoint_with_query(endpoint: str):
+    import urllib.parse
+    parsed = urllib.parse.urlparse(endpoint)
+    path = parsed.path
+    qs = urllib.parse.parse_qs(parsed.query)
+    params = {k: v[0] for k, v in qs.items()}
+    return path, params
+
+
+def call_get_raw(endpoint: str, params=None, timeout=10):
     try:
-        full_url = f"{st.session_state.api_base_url}{endpoint}"
-        response = requests.get(full_url, timeout=10)
-        if response.status_code == 200:
+        path, p = _parse_endpoint_with_query(endpoint)
+        merged = {**(p or {}), **(params or {})}
+        full = f"{st.session_state.api_base_url}{path}"
+        response = requests.get(full, params=merged or None, timeout=timeout)
+        if response.status_code in (200, 201):
             return response.json()
         else:
             logger.error(f"API Error {response.status_code} for {endpoint}")
-            st.error(f"API Error: {response.status_code}")
             return None
     except requests.exceptions.ConnectionError:
         logger.error(f"Connection error for {endpoint}")
-        st.error("Cannot connect to server")
         return None
     except Exception as e:
         logger.error(f"Error for {endpoint}: {str(e)}")
-        st.error(f"Error: {str(e)}")
         return None
 
-def api_post(endpoint, data):
+
+def call_post_raw(endpoint: str, data=None, timeout=10):
     try:
-        full_url = f"{st.session_state.api_base_url}{endpoint}"
-        response = requests.post(
-            full_url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code in [200, 201]:
+        path, _ = _parse_endpoint_with_query(endpoint)
+        full = f"{st.session_state.api_base_url}{path}"
+        response = requests.post(full, json=data, timeout=timeout)
+        if response.status_code in (200, 201):
             return response.json()
         else:
             logger.error(f"API Error {response.status_code} for {endpoint}")
-            st.error(f"API Error: {response.status_code}")
             return None
     except requests.exceptions.ConnectionError:
         logger.error(f"Connection error for {endpoint}")
-        st.error("Cannot connect to server")
         return None
     except Exception as e:
         logger.error(f"Error for {endpoint}: {str(e)}")
-        st.error(f"Error: {str(e)}")
         return None
+
+
+# ensure api base is set consistently
+api_client.ensure_api_base()
+
+def api_get(endpoint):
+    return api_client.api_get(endpoint)
+
+
+def api_post(endpoint, data):
+    return api_client.api_post(endpoint, data)
 
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
@@ -135,22 +168,52 @@ if health_data:
     st.subheader("System Metrics")
     
     metrics = health_data.get('system_metrics', {})
-    if metrics:
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric("Total Players", f"{metrics.get('total_players', 0):,}")
-        with col2:
-            st.metric("Total Teams", metrics.get('total_teams', 0))
-        with col3:
-            st.metric("Total Games", f"{metrics.get('total_games', 0):,}")
-        with col4:
-            st.metric("Total Users", metrics.get('total_users', 0))
+    # support both dict and list shapes returned from different backends
+    if isinstance(metrics, dict):
+        total_players = metrics.get('total_players') or metrics.get('players') or 0
+        total_teams = metrics.get('total_teams') or metrics.get('teams') or 0
+        total_games = metrics.get('total_games') or metrics.get('games') or 0
+        total_users = metrics.get('total_users') or metrics.get('users') or 0
+    elif isinstance(metrics, list) and len(metrics) > 0:
+        m = metrics[0]
+        total_players = m.get('total_players') or 0
+        total_teams = m.get('total_teams') or 0
+        total_games = m.get('total_games') or 0
+        total_users = m.get('total_users') or 0
+    else:
+        total_players = total_teams = total_games = total_users = 0
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Players", f"{int(total_players):,}")
+    with col2:
+        st.metric("Total Teams", int(total_teams))
+    with col3:
+        st.metric("Total Games", f"{int(total_games):,}")
+    with col4:
+        st.metric("Total Users", int(total_users))
     
     last_load = health_data.get('last_successful_load')
+    # handle multiple possible shapes for last_successful_load
     if last_load:
-        st.success(f"Last successful load: **{last_load.get('load_type', 'Unknown')}** (ID: {last_load.get('load_id', 'N/A')})")
-        st.caption(f"Completed at: {last_load.get('completed_at', 'Unknown')}")
+        if isinstance(last_load, dict):
+            load_type = last_load.get('load_type') or last_load.get('service_name') or 'Unknown'
+            load_id = last_load.get('load_id') or last_load.get('log_id') or 'N/A'
+            completed_at = last_load.get('completed_at') or last_load.get('resolved_at') or last_load.get('created_at')
+        elif isinstance(last_load, list) and len(last_load) > 0:
+            l0 = last_load[0]
+            load_type = l0.get('load_type') or l0.get('service_name') or 'Unknown'
+            load_id = l0.get('load_id') or l0.get('log_id') or 'N/A'
+            completed_at = l0.get('completed_at') or l0.get('resolved_at') or l0.get('created_at')
+        else:
+            load_type = 'Unknown'
+            load_id = 'N/A'
+            completed_at = None
+
+        st.success(f"Last successful load: **{load_type}** (ID: {load_id})")
+        if completed_at:
+            st.caption(f"Completed at: {completed_at}")
     
 else:
     st.warning("Unable to connect to system health API. Showing mock data for demonstration.")
@@ -197,15 +260,10 @@ elif resolved_filter == "Unresolved":
 error_data = api_get(endpoint)
 
 if error_data:
-    errors = error_data.get('error_logs', [])
+    errors = error_data.get('error_logs') or error_data.get('errors') or []
     
     if errors:
         df_errors = pd.DataFrame(errors)
-        
-        # Debug: Check what columns we actually have
-        if st.session_state.get('debug_mode', False):
-            st.write("Available columns:", list(df_errors.columns))
-            st.write("Sample data:", df_errors.head(1).to_dict('records'))
         
         df_errors['severity_display'] = df_errors['severity'].apply(
             lambda x: f"CRITICAL" if x == 'critical'
@@ -281,7 +339,7 @@ if error_data:
                 resolution_rate = (resolved / len(df_errors)) * 100
                 st.metric("Resolution Rate", f"{resolution_rate:.1f}%")
     else:
-        st.success("No errors found in the specified time period.")
+        st.warning("No errors found in the specified time period.")
 
 else:
     st.warning("Unable to fetch error logs. Showing sample data.")

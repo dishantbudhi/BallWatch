@@ -15,15 +15,6 @@ DROP TABLE IF EXISTS Teams;
 DROP TABLE IF EXISTS Agent;
 DROP TABLE IF EXISTS Users;
 
-CREATE TABLE Users (
-   user_id INT PRIMARY KEY AUTO_INCREMENT,
-   email VARCHAR(100) UNIQUE NOT NULL,
-   username VARCHAR(50) UNIQUE NOT NULL,
-   role VARCHAR(20) NOT NULL,
-   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-   is_active BOOLEAN DEFAULT TRUE
-);
-
 CREATE TABLE Agent (
    agent_id INT PRIMARY KEY AUTO_INCREMENT,
    first_name VARCHAR(50) NOT NULL,
@@ -45,6 +36,18 @@ CREATE TABLE Teams (
    championships INT DEFAULT 0,
    offensive_system VARCHAR(100),
    defensive_system VARCHAR(100)
+);
+
+CREATE TABLE Users (
+   user_id INT PRIMARY KEY AUTO_INCREMENT,
+   email VARCHAR(100) UNIQUE NOT NULL,
+   username VARCHAR(50) UNIQUE NOT NULL,
+   role VARCHAR(20) NOT NULL,
+   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+   is_active BOOLEAN DEFAULT TRUE,
+   team_id INT NULL,
+   CONSTRAINT FK_Users_Teams FOREIGN KEY (team_id) REFERENCES Teams(team_id)
+       ON UPDATE CASCADE ON DELETE SET NULL
 );
 
 CREATE TABLE Players (
@@ -80,7 +83,7 @@ CREATE TABLE TeamsPlayers (
    CONSTRAINT FK_TeamsPlayers_Players FOREIGN KEY (player_id)
        REFERENCES Players(player_id) ON UPDATE CASCADE ON DELETE CASCADE,
    CONSTRAINT FK_TeamsPlayers_Teams FOREIGN KEY (team_id)
-       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE
+       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
 CREATE TABLE Game (
@@ -151,7 +154,7 @@ CREATE TABLE LineupConfiguration (
    offensive_rating DECIMAL(5,2),
    defensive_rating DECIMAL(5,2),
    CONSTRAINT FK_LineupConfiguration_Teams FOREIGN KEY (team_id)
-       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE
+       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE RESTRICT
 );
 
 CREATE TABLE PlayerLineups (
@@ -188,7 +191,7 @@ CREATE TABLE DraftEvaluations (
 CREATE TABLE GamePlans (
    plan_id INT PRIMARY KEY AUTO_INCREMENT,
    team_id INT NOT NULL,
-   opponent_id INT,
+   opponent_id INT NOT NULL,
    game_id INT,
    plan_name VARCHAR(200) NOT NULL,
    offensive_strategy TEXT,
@@ -199,9 +202,9 @@ CREATE TABLE GamePlans (
    created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
    updated_date DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
    CONSTRAINT FK_GamePlans_Team FOREIGN KEY (team_id)
-       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE,
+       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE RESTRICT,
    CONSTRAINT FK_GamePlans_Opponent FOREIGN KEY (opponent_id)
-       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE CASCADE,
+       REFERENCES Teams(team_id) ON UPDATE CASCADE ON DELETE RESTRICT,
    CONSTRAINT FK_GamePlans_Game FOREIGN KEY (game_id)
        REFERENCES Game(game_id) ON UPDATE CASCADE ON DELETE CASCADE
 );

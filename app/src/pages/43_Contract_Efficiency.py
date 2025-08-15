@@ -5,45 +5,16 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import requests
 from datetime import datetime
 from modules.nav import SideBarLinks
+from modules import api_client
 
 st.set_page_config(layout='wide')
 SideBarLinks()
+
+api_client.ensure_api_base()
+
 st.title('Contract Efficiency & Free Agency Management')
-
-BASE_URL = "http://api:4000"
-
-def make_request(endpoint, method='GET', data=None):
-    try:
-        url = f"{BASE_URL}{endpoint}"
-        if method == 'GET':
-            response = requests.get(url)
-        elif method == 'PUT':
-            response = requests.put(url, json=data)
-        
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            st.error(f"API Error: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        st.error(f"Connection Error: {str(e)}")
-        return None
-
-# Load data
-if st.button("Load Free Agent Data"):
-    # Load players data
-    players_data = make_request("/basketball/players")
-    if players_data and 'players' in players_data:
-        st.session_state['players'] = players_data['players']
-        
-    # Load evaluations for contract efficiency analysis
-    eval_data = make_request("/strategy/draft-evaluations")
-    if eval_data and 'evaluations' in eval_data:
-        st.session_state['evaluations'] = eval_data['evaluations']
-        st.success(f"Loaded {len(eval_data['evaluations'])} player evaluations")
 
 # Salary cap settings
 SALARY_CAP = 136.0
@@ -68,9 +39,19 @@ if 'evaluations' in st.session_state:
         # Estimate salary based on rating (simplified formula)
         df['estimated_salary'] = (df['overall_rating'] * 0.5).round(1)
         df['value_score'] = (df['overall_rating'] / (df['estimated_salary'] + 1)).round(2)
-        df['contract_efficiency'] = df['value_score'].apply(
-            lambda x: 'Excellent' if x > 5 else ('Good' if x > 3 else ('Fair' if x > 2 else 'Poor'))
+        # Map value_score to relative efficiency buckets (quartiles) so labels reflect the dataset distribution
+        # Use rank percentile to avoid issues when many identical value_score values exist
+        df['value_rank_pct'] = df['value_score'].rank(method='average', pct=True)
+        df['contract_efficiency'] = pd.cut(
+            df['value_rank_pct'],
+            bins=[0.0, 0.25, 0.5, 0.75, 1.0],
+            labels=['Poor', 'Fair', 'Good', 'Excellent'],
+            include_lowest=True
         )
+        # Ensure any missing classifications are explicit
+        df['contract_efficiency'] = df['contract_efficiency'].astype(object).fillna('Unknown')
+        # Keep a compact percentile column for debugging/inspection
+        df['value_rank_pct'] = df['value_rank_pct'].round(3)
         
         # Top metrics
         col1, col2, col3, col4 = st.columns(4)
@@ -98,21 +79,38 @@ if 'evaluations' in st.session_state:
             col1, col2 = st.columns([2, 1])
             
             with col1:
-                # Value scatter plot
+                # Value scatter plot — color by contract_efficiency categories so colors align with labels
+                #                color_map = {
+                #                    'Poor': '#d73027',      # red
+                #                    'Fair': '#fc8d59',      # orange
+                #                    'Good': '#91cf60',      # light green
+                #                    'Excellent': '#1a9850', # dark green
+                #                    'Unknown': 'gray'
+                #                }
+                # Use a simplified green/red scheme: Good/Excellent => green, Fair/Poor => red
+                color_map = {
+                    'Poor': '#d73027',      # red
+                    'Fair': '#d73027',      # red (treat Fair as caution/red to match user's request)
+                    'Good': '#1a9850',      # green
+                    'Excellent': '#1a9850', # green
+                    'Unknown': 'gray'
+                }
+                
                 fig = px.scatter(
                     df,
                     x='estimated_salary',
                     y='overall_rating',
-                    color='value_score',
+                    color='contract_efficiency',
                     size='potential_rating',
-                    hover_data=['first_name', 'last_name', 'position'],
+                    hover_data=['first_name', 'last_name', 'position', 'value_score', 'value_rank_pct'],
                     title="Player Value vs Estimated Contract",
                     labels={
                         'estimated_salary': 'Estimated Salary ($M)',
                         'overall_rating': 'Overall Rating',
+                        'contract_efficiency': 'Contract Efficiency',
                         'value_score': 'Value Score'
                     },
-                    color_continuous_scale='RdYlGn'
+                    color_discrete_map=color_map
                 )
                 
                 # Add value zones
@@ -146,20 +144,43 @@ if 'evaluations' in st.session_state:
             
             # Value rankings table
             st.subheader("Contract Efficiency Rankings")
-            
+
             efficiency_table = df.nlargest(10, 'value_score')[
                 ['first_name', 'last_name', 'position', 'overall_rating', 
                  'estimated_salary', 'value_score', 'contract_efficiency']
             ].copy()
-            
-            st.dataframe(
-                efficiency_table.style.format({
+
+            # Prepare display DataFrame without the contract_efficiency column
+            display_df = efficiency_table.drop(columns=['contract_efficiency']).copy()
+
+            # Row-wise style: color the VALUE cell based on the contract_efficiency label (looked up on the original table)
+            def _row_style_by_index(row):
+                idx = row.name
+                eff = efficiency_table.at[idx, 'contract_efficiency'] if idx in efficiency_table.index else None
+                styles = []
+                for col in display_df.columns:
+                    if col == 'value_score':
+                        if eff in ('Excellent', 'Good'):
+                            styles.append('background-color: #1a9850; color: white')
+                        elif eff in ('Fair', 'Poor'):
+                            styles.append('background-color: #d73027; color: white')
+                        else:
+                            styles.append('')
+                    else:
+                        styles.append("")
+                return styles
+
+            styled = (
+                display_df.style
+                .format({
                     'estimated_salary': '${:.1f}M',
                     'overall_rating': '{:.0f}',
                     'value_score': '{:.2f}'
-                }).background_gradient(subset=['value_score'], cmap='RdYlGn'),
-                use_container_width=True
+                })
+                .apply(_row_style_by_index, axis=1)
             )
+
+            st.dataframe(styled, use_container_width=True)
         
         with tab2:
             st.header("Free Agent Market Analysis")
@@ -400,3 +421,30 @@ else:
 # Footer with key insights
 st.markdown("---")
 st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Available Cap Space: ${available_cap:.1f}M")
+
+def call_get_raw(endpoint: str, params=None, timeout=10):
+    return api_client.api_get(endpoint, params=params, timeout=timeout)
+
+
+def call_put_raw(endpoint: str, data=None, timeout=10):
+    return api_client.api_put(endpoint, data=data, timeout=timeout)
+
+
+def get_draft_evaluations():
+    try:
+        resp = api_client.api_get('/strategy/draft-evaluations')
+        if isinstance(resp, dict) and 'evaluations' in resp:
+            return resp.get('evaluations', [])
+        if isinstance(resp, list):
+            return resp
+    except Exception:
+        logger.exception('Exception in get_draft_evaluations')
+    return []
+
+
+def update_evaluation(evaluation_id, data):
+    try:
+        return api_client.api_put(f"/strategy/draft-evaluations/{evaluation_id}", data=data)
+    except Exception:
+        logger.exception('Exception in update_evaluation')
+    return None

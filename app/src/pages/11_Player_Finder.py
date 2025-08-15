@@ -1,23 +1,72 @@
 # pages/Player_Finder.py
-import os
 import logging
-import requests
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 from modules.nav import SideBarLinks
+from modules import api_client
+
+# ensure session api base is initialized
+api_client.ensure_api_base()
+
+# Replace local URL helpers with centralized client
+
+def call_get_raw(endpoint: str, params: dict | None = None, timeout=20):
+    return api_client.api_get(endpoint, params=params, timeout=timeout) or {}
+
+
+def call_post_raw(endpoint: str, data: dict | None = None, timeout=20):
+    return api_client.api_post(endpoint, data=data, timeout=timeout) or {}
+
+
+def call_put_raw(endpoint: str, data: dict | None = None, timeout=20):
+    return api_client.api_put(endpoint, data=data, timeout=timeout) or {}
+
+
+def _default_api_base():
+    # retained for compatibility but session-managed by api_client
+    return api_client.ensure_api_base()
+
+BASE_URL = api_client.ensure_api_base()
+
+
+def get_teams(timeout=5):
+    data = api_client.api_get('/basketball/teams', timeout=timeout)
+    if isinstance(data, dict) and 'teams' in data:
+        return data.get('teams', [])
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def get_players(params: dict | None = None):
+    """Use centralized api_client.get_players (deduplicated) to avoid duplicate implementations."""
+    try:
+        return api_client.get_players(params=params)
+    except Exception:
+        # fallback to original behavior if api_client helper is unavailable
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
+
+
+def get_player_stats(player_id: int):
+    data = api_client.api_get(f'/basketball/players/{player_id}/stats')
+    if not data:
+        return {}
+    return data.get('stats') or data.get('player_stats') or data
 
 logger = logging.getLogger(__name__)
-st.set_page_config(page_title="Player Finder", layout="wide")
+st.set_page_config(page_title="Player Finder - Superfan", layout="wide")
 
-# Render your app's sidebar nav (logo, links, auth redirect, etc.)
+# Render shared sidebar/nav
 SideBarLinks()
 
-st.title("🔎 Player Finder (Superfan)")
-
-# If your Streamlit app runs in Docker alongside the API, keep http://api:4000
-# If you run Streamlit on your host, set API_BASE_URL=http://localhost:4000
-BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
+st.title("🔎 Player Finder — Superfan")
+st.caption("Search and compare players; optionally include season averages.")
 
 # ---------------- Session Defaults (to keep results sticky across reruns) -------------
 if "search_active" not in st.session_state:
@@ -26,17 +75,6 @@ if "last_filters_pf" not in st.session_state:
     st.session_state.last_filters_pf = {}
 
 # ---------- Utilities ----------
-def api_get(path: str, params: dict | None = None):
-    try:
-        url = f"{BASE_URL}{path}"
-        r = requests.get(url, params=params, timeout=20)
-        if r.status_code in (200, 201):
-            return r.json()
-        st.error(f"API {r.status_code}: {r.text}")
-    except Exception as e:
-        st.error(f"Connection error: {e}")
-    return None
-
 @st.cache_data(ttl=180)
 def resolve_team_ids_by_name(name_query: str) -> list[int]:
     """
@@ -45,10 +83,10 @@ def resolve_team_ids_by_name(name_query: str) -> list[int]:
     """
     if not name_query:
         return []
-    resp = api_get("/basketball/teams")
-    teams = resp.get("teams", []) if isinstance(resp, dict) else (resp or [])
+    teams = get_teams()
     if not teams:
         return []
+    # teams is expected to be a list of dicts (get_teams returns list)
     df = pd.DataFrame(teams)
     if "name" not in df.columns or "team_id" not in df.columns:
         return []
@@ -77,15 +115,14 @@ def load_players(position=None, team_name=None, min_age=None, max_age=None, min_
             return pd.DataFrame()  # no such team(s)
         for tid in team_ids:
             params = {**base_params, "team_id": tid}
-            data = api_get("/basketball/players", params)
-            part = data.get("players", []) if isinstance(data, dict) else (data or [])
+            # call backend via local get_players helper
+            part = get_players(params)
             rows.extend(part)
         # De-dup by player_id (keep last occurrence)
         if rows:
             rows = list({r.get("player_id"): r for r in rows if r.get("player_id") is not None}.values())
     else:
-        data = api_get("/basketball/players", base_params)
-        rows = data.get("players", []) if isinstance(data, dict) else (data or [])
+        rows = get_players(base_params)
 
     return pd.DataFrame(rows)
 
@@ -95,15 +132,8 @@ def fetch_player_stats(player_id: int):
     Fetch per-player stats WITHOUT season/game type filters.
     Supports both {player_stats: {...}} and {stats: {...}} response shapes.
     """
-    resp = api_get(f"/basketball/players/{player_id}/stats")
-    if not resp:
-        return {}
-    # Try both keys for compatibility
-    if "stats" in resp and resp["stats"] is not None:
-        return resp["stats"]
-    if "player_stats" in resp and resp["player_stats"] is not None:
-        return resp["player_stats"]
-    return {}
+    resp = get_player_stats(player_id)
+    return resp or {}
 
 def enrich_with_stats(df_players: pd.DataFrame, max_players: int = 50):
     """For performance, cap the number of stat fetches."""
@@ -260,15 +290,3 @@ if st.session_state.search_active:
     st.dataframe(df_sorted[present_cols], use_container_width=True, hide_index=True)
 else:
     st.info("Set filters above and click **Search Players**.")
-
-# Optional: debug footer
-with st.expander("Debug Info"):
-    st.write({
-        "BASE_URL": BASE_URL,
-        "players_path": "/basketball/players",
-        "teams_path": "/basketball/teams",
-        "stats_path": "/basketball/players/<id>/stats",
-        "team_name_entered": team_name,
-        "search_active": st.session_state.search_active,
-        "filters": st.session_state.last_filters_pf,
-    })

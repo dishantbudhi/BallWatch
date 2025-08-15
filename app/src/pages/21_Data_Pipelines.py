@@ -1,82 +1,130 @@
+import os
 import streamlit as st
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
 import logging
 from modules.nav import SideBarLinks
+from modules import api_client
 
 logger = logging.getLogger(__name__)
 
 st.set_page_config(
-    page_title="Data Pipelines - BallWatch",
+    page_title="Data Pipelines - Data Engineer",
     layout="wide"
 )
 
 SideBarLinks()
 
+st.title("Data Pipelines — Data Engineer")
+st.caption("Monitor, manage, and troubleshoot data loads for the analytics platform.")
+
+# API base URL (supports env override)
 if 'api_base_url' not in st.session_state:
-    st.session_state.api_base_url = 'http://api:4000'
+    def _default_api_base():
+        env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
+        if env:
+            return env
+        try:
+            if os.path.exists('/.dockerenv'):
+                return 'http://api:4000'
+        except Exception:
+            pass
+        return 'http://localhost:4000'
+    st.session_state.api_base_url = _default_api_base()
+
+# Replace local api helpers with centralized ones
 
 def api_get(endpoint):
-    """Make GET request to API"""
-    full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        response = requests.get(full_url, timeout=10)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            if response.status_code == 404:
-                st.error(f"Endpoint not found: {endpoint}")
-            else:
-                st.error(f"Error {response.status_code}")
-            return None
+        return api_client.api_get(endpoint)
     except Exception as e:
         st.error(f"Connection error: {str(e)}")
         return None
 
 def api_post(endpoint, data):
-    """Make POST request to API"""
-    full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        response = requests.post(
-            full_url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            if response.status_code == 409:
-                st.error("A load of this type is already running")
-            else:
-                st.error(f"Error {response.status_code}: {response.text}")
-            return None
+        return api_client.api_post(endpoint, data)
     except Exception as e:
         st.error(f"Connection error: {str(e)}")
         return None
 
 def api_put(endpoint, data):
-    """Make PUT request to API"""
-    full_url = f"{st.session_state.api_base_url}{endpoint}"
     try:
-        response = requests.put(
-            full_url,
-            json=data,
-            headers={'Content-Type': 'application/json'},
-            timeout=10
-        )
-        if response.status_code == 200:
-            return response.json()
-        else:
-            st.error(f"Error {response.status_code}: {response.text}")
-            return None
+        return api_client.api_put(endpoint, data)
     except Exception as e:
         st.error(f"Connection error: {str(e)}")
         return None
 
+def _parse_endpoint_with_query(endpoint: str):
+    import urllib.parse
+    from typing import Dict, Any
+    if not endpoint:
+        return endpoint, {}
+    parsed = urllib.parse.urlparse(endpoint)
+    path = parsed.path
+    qs = urllib.parse.parse_qs(parsed.query)
+    params = {k: v[0] for k, v in qs.items()}
+    return path, params
+
+
+def call_get_raw(endpoint: str, params=None, timeout=10):
+    try:
+        path, p = _parse_endpoint_with_query(endpoint)
+        merged = {**(p or {}), **(params or {})}
+        full = f"{st.session_state.api_base_url}{path}"
+        resp = requests.get(full, params=merged or None, timeout=timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.warning('GET %s returned %s', full, resp.status_code)
+        # Show details in UI when debug mode is active to help debugging
+        try:
+            if st.session_state.get('debug_mode', False):
+                st.error(f"GET {full} returned {resp.status_code}: {resp.text}")
+        except Exception:
+            # Avoid raising UI errors from logging
+            pass
+    except Exception as e:
+        logger.exception('Exception in call_get_raw(%s): %s', endpoint, e)
+    return None
+
+
+def call_post_raw(endpoint: str, data=None, timeout=10):
+    try:
+        path, _ = _parse_endpoint_with_query(endpoint)
+        full = f"{st.session_state.api_base_url}{path}"
+        resp = requests.post(full, json=data, timeout=timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.warning('POST %s returned %s', full, resp.status_code)
+        try:
+            # production behavior: do not surface raw API responses in UI
+            if st.session_state.get('debug_mode', False):
+                st.error(f"POST {full} returned {resp.status_code}: {resp.text}")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.exception('Exception in call_post_raw(%s): %s', endpoint, e)
+    return None
+
+
+def call_put_raw(endpoint: str, data=None, timeout=10):
+    try:
+        path, _ = _parse_endpoint_with_query(endpoint)
+        full = f"{st.session_state.api_base_url}{path}"
+        resp = requests.put(full, json=data, timeout=timeout)
+        if resp.status_code in (200, 201):
+            return resp.json()
+        logger.warning('PUT %s returned %s', full, resp.status_code)
+        # production behavior: do not surface raw API responses in UI
+    except Exception as e:
+        logger.exception('Exception in call_put_raw(%s): %s', endpoint, e)
+    return None
+
+# Debug mode UI removed from this page
+
 # Main Page
-st.title("Data Pipelines Management")
+st.header("Data Pipelines Management")
 st.markdown("Monitor and manage data loads for BallWatch analytics platform")
 
 # System Health Check
@@ -128,21 +176,46 @@ if load_type_filter != "All":
 
 loads_data = api_get(endpoint)
 
-# Debug information
-if st.session_state.get('debug_mode', False):
-    with st.expander("Debug: API Response"):
-        st.write("**Endpoint:** ", endpoint)
-        if loads_data:
-            st.write("**Response Keys:** ", list(loads_data.keys()))
-            st.json(loads_data)
-        else:
-            st.write("**Response:** None")
+# Flexible extractor to handle different API shapes
+def _extract_loads(resp):
+    if not resp:
+        return None
+    if isinstance(resp, list):
+        return resp
+    if isinstance(resp, dict):
+        for k in ('loads', 'results', 'data', 'items'):
+            if k in resp and resp[k] is not None:
+                return resp[k]
+        # some endpoints may return the list at top-level under other keys
+        # fall back to trying to find a list value
+        for v in resp.values():
+            if isinstance(v, list):
+                return v
+    return None
 
-if loads_data and loads_data.get('loads'):
-    loads = loads_data['loads']
-    
-    # Create DataFrame
-    df = pd.DataFrame(loads)
+loads = _extract_loads(loads_data)
+
+# Debug information removed: rely on logging for troubleshooting
+
+if loads and len(loads) > 0:
+    # ensure loads is a list of dicts
+    # Normalize fields (accept created_at as started_at fallback)
+    for l in loads:
+        if 'started_at' not in l and 'created_at' in l:
+            l['started_at'] = l.get('created_at')
+        if 'completed_at' not in l and 'resolved_at' in l:
+            l['completed_at'] = l.get('resolved_at')
+        # normalize load_type naming differences
+        l['load_type'] = l.get('load_type') or l.get('service_name')
+        # ensure numeric duration exists
+        if 'duration_seconds' not in l:
+            try:
+                l['duration_seconds'] = int(l.get('duration_seconds') or 0)
+            except Exception:
+                l['duration_seconds'] = 0
+
+    loads_list = loads
+    df = pd.DataFrame(loads_list)
     
     if not df.empty:
         # Format status with better display
@@ -153,12 +226,15 @@ if loads_data and loads_data.get('loads'):
                 'failed': 'FAILED',
                 'pending': 'PENDING'
             }
-            return status_icons.get(status, status.upper())
+            return status_icons.get(status, str(status).upper())
         
+        # Some rows may have status derived differently; ensure column exists
+        if 'status' not in df.columns:
+            df['status'] = df.get('severity', 'pending').apply(lambda x: str(x))
         df['status_display'] = df['status'].apply(format_status)
         
-        # Format dates
-        df['started_at'] = pd.to_datetime(df['started_at'], errors='coerce').dt.strftime('%m/%d %H:%M')
+        # Format dates with fallbacks
+        df['started_at'] = pd.to_datetime(df.get('started_at') or df.get('created_at'), errors='coerce').dt.strftime('%m/%d %H:%M')
         df['completed_at'] = df['completed_at'].apply(
             lambda x: pd.to_datetime(x, errors='coerce').strftime('%m/%d %H:%M') if pd.notna(x) and x else 'In Progress'
         )
@@ -167,21 +243,15 @@ if loads_data and loads_data.get('loads'):
         df['duration_display'] = df['duration_seconds'].apply(
             lambda x: f"{int(x//60)}m {int(x%60)}s" if pd.notna(x) else 'N/A'
         )
-        
+
         # Display enhanced table
         st.dataframe(
             df[['load_id', 'load_type', 'status_display', 'started_at', 'completed_at', 
-                'duration_display', 'records_processed', 'records_failed', 'initiated_by']],
+                'duration_display', 'records_processed', 'records_failed', 'initiated_by']]
+            if set(['load_id','load_type','status_display','started_at','completed_at','duration_display','records_processed','records_failed','initiated_by']).issubset(df.columns)
+            else df,
             column_config={
-                "load_id": st.column_config.NumberColumn("Load ID", width="small"),
-                "load_type": st.column_config.TextColumn("Load Type", width="medium"),
-                "status_display": st.column_config.TextColumn("Status", width="medium"),
-                "started_at": st.column_config.TextColumn("Started", width="small"),
-                "completed_at": st.column_config.TextColumn("Completed", width="small"),
-                "duration_display": st.column_config.TextColumn("Duration", width="small"),
-                "records_processed": st.column_config.NumberColumn("Processed", width="small"),
-                "records_failed": st.column_config.NumberColumn("Failed", width="small"),
-                "initiated_by": st.column_config.TextColumn("User", width="small")
+                "load_id": st.column_config.NumberColumn("Load ID", width="small") if 'load_id' in df.columns else None,
             },
             use_container_width=True,
             hide_index=True
@@ -194,23 +264,23 @@ if loads_data and loads_data.get('loads'):
         with col1:
             st.metric("Total Loads", len(df))
         with col2:
-            completed = len(df[df['status'] == 'completed'])
+            completed = len(df[df['status'] == 'completed']) if 'status' in df.columns else 0
             st.metric("Completed", completed)
         with col3:
-            running = len(df[df['status'] == 'running'])
+            running = len(df[df['status'] == 'running']) if 'status' in df.columns else 0
             st.metric("Running", running)
         with col4:
-            failed = len(df[df['status'] == 'failed'])
+            failed = len(df[df['status'] == 'failed']) if 'status' in df.columns else 0
             st.metric("Failed", failed)
         with col5:
-            total_processed = df['records_processed'].sum()
-            st.metric("Total Records", f"{total_processed:,}")
+            total_processed = df.get('records_processed', pd.Series([0])).sum()
+            st.metric("Total Records", f"{int(total_processed):,}")
         
         # Success rate
         if len(df) > 0:
-            success_rate = (completed / len(df)) * 100
+            success_rate = (completed / len(df)) * 100 if len(df) > 0 else 0
             st.info(f"**Success Rate:** {success_rate:.1f}% ({completed}/{len(df)} loads completed successfully)")
-        
+
         # Running loads with progress
         running_loads = df[df['status'] == 'running']
         if not running_loads.empty:
@@ -281,7 +351,50 @@ if loads_data and loads_data.get('loads'):
                                     st.success(f"New load started: ID {result.get('load_id')}")
                                     st.rerun()
     else:
+        # No loads returned from API for the given filters — show a helpful message and sample data for debugging
         st.info("No data loads found for the selected criteria.")
+        if st.session_state.get('debug_mode', False):
+            st.info('Debug mode enabled — showing sample data for Data Pipelines')
+        # Provide mock/sample loads so the UI remains useful in dev/test environments
+        sample_loads = [
+            {
+                'load_id': 101,
+                'load_type': 'NBA API',
+                'status': 'completed',
+                'started_at': '2025-08-14 02:10',
+                'completed_at': '2025-08-14 02:12',
+                'duration_seconds': 120,
+                'records_processed': 12456,
+                'records_failed': 0,
+                'initiated_by': 'system',
+                'source_file': 'nba_stats_20250814.json',
+            },
+            {
+                'load_id': 102,
+                'load_type': 'Analytics Engine',
+                'status': 'failed',
+                'started_at': '2025-08-14 03:00',
+                'completed_at': None,
+                'duration_seconds': 75,
+                'records_processed': 5000,
+                'records_failed': 125,
+                'initiated_by': 'ingest_bot',
+                'error_message': 'Parquet schema mismatch',
+                'source_file': 'agg_events_20250814.parquet',
+            }
+        ]
+        df_sample = pd.DataFrame(sample_loads)
+        df_sample['status_display'] = df_sample['status'].str.upper()
+        df_sample['started_at'] = pd.to_datetime(df_sample['started_at'], errors='coerce').dt.strftime('%m/%d %H:%M')
+        df_sample['completed_at'] = df_sample['completed_at'].apply(lambda x: pd.to_datetime(x, errors='coerce').strftime('%m/%d %H:%M') if pd.notna(x) and x else 'In Progress')
+        df_sample['duration_display'] = df_sample['duration_seconds'].apply(lambda x: f"{int(x//60)}m {int(x%60)}s" if pd.notna(x) else 'N/A')
+        st.dataframe(
+            df_sample[[ 'load_id', 'load_type', 'status_display', 'started_at', 'completed_at', 'duration_display', 'records_processed', 'records_failed', 'initiated_by' ]],
+            use_container_width=True,
+            hide_index=True
+        )
+        # Provide quick actions in mock mode
+        st.info('This is sample data shown because real data was not returned by the API.')
 
 else:
     st.info("No data loads found. Try adjusting your filters or check system connectivity.")

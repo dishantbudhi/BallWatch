@@ -1,3 +1,4 @@
+import os
 import logging
 logger = logging.getLogger(__name__)
 
@@ -8,29 +9,59 @@ import plotly.graph_objects as go
 import requests
 from datetime import datetime
 from modules.nav import SideBarLinks
+from modules import api_client
 
-st.set_page_config(layout='wide')
+st.set_page_config(page_title='Player Progress - General Manager', layout='wide')
 SideBarLinks()
-st.title('Player Progress & Development')
 
-BASE_URL = "http://api:4000"
+api_client.ensure_api_base()
+
+# Debug mode removed
+
+st.title('Player Progress & Development — General Manager')
+st.caption('Track player development, evaluations, and generate development plans.')
+
+def call_get_raw(endpoint: str, params=None, timeout=10):
+    return api_client.api_get(endpoint, params=params, timeout=timeout)
+
+
+def call_post_raw(endpoint: str, data=None, timeout=10):
+    return api_client.api_post(endpoint, data=data, timeout=timeout)
+
+
+def call_put_raw(endpoint: str, data=None, timeout=10):
+    return api_client.api_put(endpoint, data=data, timeout=10)
+
+
+def get_players(params: dict | None = None):
+    try:
+        return api_client.get_players(params=params)
+    except Exception:
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
 
 def make_request(endpoint, method='GET', data=None):
+    # Call backend endpoints directly so this helper can be used anywhere in the file
     try:
-        url = f"{BASE_URL}{endpoint}"
-        if method == 'GET':
-            response = requests.get(url)
-        elif method == 'PUT':
-            response = requests.put(url, json=data)
-        
-        if response.status_code in [200, 201]:
-            return response.json()
-        else:
-            st.error(f"API Error: {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        st.error(f"Connection Error: {str(e)}")
-        return None
+        if endpoint.startswith('/basketball/players') and method == 'GET':
+            return {'players': get_players({})}
+        if endpoint.startswith('/strategy/draft-evaluations') and method == 'GET':
+            resp = call_get_raw('/strategy/draft-evaluations')
+            if isinstance(resp, dict) and 'evaluations' in resp:
+                return {'evaluations': resp.get('evaluations', [])}
+            if isinstance(resp, list):
+                return {'evaluations': resp}
+            return {'evaluations': []}
+        if endpoint.startswith('/strategy/draft-evaluations') and method == 'PUT':
+            # endpoint expected like '/strategy/draft-evaluations/{id}'
+            return call_put_raw(endpoint, data)
+    except Exception:
+        logger.exception('Exception in make_request')
+    return None
 
 # Load data
 if st.button("Load Player Data"):
@@ -278,3 +309,23 @@ else:
     - Potential rating for development tracking
     - Scouting information (strengths, weaknesses, scout_notes)
     """)
+
+def get_draft_evaluations():
+    # lightweight local placeholder — other pages implement full logic
+    try:
+        data = call_get_raw('/strategy/draft-evaluations')
+        if isinstance(data, dict) and 'evaluations' in data:
+            return data['evaluations']
+        if isinstance(data, list):
+            return data
+    except Exception:
+        logger.exception('Exception in get_draft_evaluations')
+    return []
+
+
+def update_evaluation(evaluation_id, data):
+    try:
+        return call_put_raw(f"/strategy/draft-evaluations/{evaluation_id}", data)
+    except Exception:
+        logger.exception('Exception in update_evaluation')
+    return None

@@ -1,24 +1,21 @@
 # pages/Player_Comparison.py
-import os
 import logging
-import requests
 import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from modules.nav import SideBarLinks
+from modules import api_client
+import os
 
 logger = logging.getLogger(__name__)
-st.set_page_config(page_title="Player Comparison", layout="wide")
+st.set_page_config(page_title="Player Comparison - Superfan", layout="wide")
+
+# Shared sidebar/nav
 SideBarLinks()
 
-st.title("🆚 Player Comparison")
-st.caption("Compare two players side-by-side, view historical results, and analyze recent box scores.")
-
-# ------------------------------------------------------------------------------------
-# Config
-# ------------------------------------------------------------------------------------
-BASE_URL = os.getenv("API_BASE_URL", "http://api:4000")
+st.title("🆚 Player Comparison — Superfan")
+st.caption("Compare two players side-by-side, view recent games, and visualize trends.")
 
 # ------------------------------------------------------------------------------------
 # Session defaults
@@ -28,19 +25,44 @@ if "compare" not in st.session_state:
 if "last_filters" not in st.session_state:
     st.session_state.last_filters = {}
 
-# ------------------------------------------------------------------------------------
-# API helpers
-# ------------------------------------------------------------------------------------
-def api_get(path: str, params: dict | None = None):
+api_client.ensure_api_base()
+
+# Use api_client for raw calls
+def call_get_raw(endpoint: str, params: dict | None = None, timeout=5):
+    return api_client.api_get(endpoint, params=params, timeout=timeout)
+
+
+def get_teams(timeout=5):
+    data = api_client.api_get('/basketball/teams', timeout=timeout)
+    if isinstance(data, dict) and 'teams' in data:
+        return data.get('teams', [])
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def get_players(params: dict | None = None):
     try:
-        url = f"{BASE_URL}{path}"
-        r = requests.get(url, params=params, timeout=25)
-        if r.status_code in (200, 201):
-            return r.json()
-        st.error(f"API {r.status_code}: {r.text}")
-    except Exception as e:
-        st.error(f"Connection error: {e}")
-    return None
+        return api_client.get_players(params=params)
+    except Exception:
+        data = api_client.api_get('/basketball/players', params=params)
+        if isinstance(data, dict) and 'players' in data:
+            return data.get('players', [])
+        if isinstance(data, list):
+            return data
+        return []
+
+
+def get_player_stats(player_id: int):
+    return api_client.api_get(f'/basketball/players/{player_id}/stats')
+
+# compatibility wrapper used by page code
+def api_get(path: str, params: dict | None = None):
+    if path.startswith('/basketball/players'):
+        return {'players': get_players(params)}
+    if path == '/basketball/teams':
+        return {'teams': get_teams()}
+    return call_get_raw(path, params)
 
 @st.cache_data(ttl=300)
 def fetch_teams_df() -> pd.DataFrame:
@@ -110,10 +132,10 @@ def load_all_players(position: str | None = None, team_name: str | None = None) 
 
 @st.cache_data(ttl=180)
 def fetch_player_stats(player_id: int):
-    resp = api_get(f"/basketball/players/{player_id}/stats")
+    resp = get_player_stats(player_id)
     if not resp:
         return {}, pd.DataFrame()
-    stats = resp.get("stats") or resp.get("player_stats") or {}
+    stats = resp.get("stats") or resp.get("player_stats") or resp.get('player_stats') or {}
     recent = pd.DataFrame(resp.get("recent_games", []) or [])
     if "game_date" not in recent.columns and "date" in recent.columns:
         recent = recent.rename(columns={"date": "game_date"})
@@ -291,14 +313,3 @@ if st.session_state.compare and p1_id and p2_id:
 
 else:
     st.info("Choose two players above and press **Compare Players** to view stats, trends, and box scores.")
-
-# Debug
-with st.expander("Debug Info"):
-    st.write({
-        "BASE_URL": BASE_URL,
-        "players_path": "/basketball/players",
-        "stats_path": "/basketball/players/<id>/stats",
-        "teams_path": "/basketball/teams",
-        "compare_state": st.session_state.compare,
-        "filters": st.session_state.last_filters,
-    })
