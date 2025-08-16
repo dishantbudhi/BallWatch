@@ -1,4 +1,7 @@
 # pages/Player_Finder.py
+
+"""Player Finder page: search and filter players."""
+
 import logging
 import pandas as pd
 import streamlit as st

@@ -1,3 +1,5 @@
+"""Historical games page: view past results and stats."""
+
 # pages/Game_Search.py
 import os
 import logging

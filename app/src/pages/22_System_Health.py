@@ -86,6 +86,8 @@ def call_post_raw(endpoint: str, data=None, timeout=10):
         return None
 
 
+"""System health and service status checks."""
+
 # ensure api base is set consistently
 api_client.ensure_api_base()
 

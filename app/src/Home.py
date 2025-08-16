@@ -8,8 +8,6 @@ import logging
 logging.basicConfig(format='%(filename)s:%(lineno)s:%(levelname)s -- %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# import the main streamlit library as well
-# as SideBarLinks function from src/modules folder
 import streamlit as st
 from modules.nav import SideBarLinks
 import time
@@ -17,299 +15,360 @@ import requests
 import os
 import urllib.parse
 from typing import Optional, Dict, Any, Tuple
-from modules.api_client import get_users, get_teams as api_get_teams, assign_team as api_assign_team
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
+# Create a session with retry strategy
+def create_robust_session():
+    """Create a requests Session with retries and pooling."""
+    session = requests.Session()
+    retry_strategy = Retry(
+        total=2,
+        backoff_factor=0.5,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "PUT", "POST", "DELETE", "OPTIONS", "TRACE"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
-# Inline API base and minimal helpers (ported from modules/api_client.py)
+# Global session for connection pooling
+api_session = create_robust_session()
+
+# Enhanced API base URL detection with correct Docker service names
 def _default_api_base():
-    """Determine a sensible default API base URL.
-
-    Priority:
-      1) Respect environment variables API_BASE_URL or API_BASE
-      2) If running inside a container (/.dockerenv) prefer the compose service hostname 'api:4000'
-      3) Fall back to localhost for local development
-    """
+    """Determine API base URL with fallback logic."""
+    # 1. Check environment variables first
     env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
     if env:
+        logger.info(f"Using API_BASE from environment: {env}")
         return env
+    
+    # 2. Check if we're running in Docker
+    is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+    
+    if is_docker:
+        # Try common Docker service names used in docker-compose
+        docker_urls = [
+            'http://web-api:4000',  # Most likely based on your container names
+            'http://api:4000',
+            'http://flask-api:4000',
+            'http://backend:4000'
+        ]
+        
+        for url in docker_urls:
+            try:
+                logger.info(f"Trying Docker service: {url}")
+                resp = api_session.get(f'{url}/system/health', timeout=2)
+                if resp.status_code in [200, 404]:
+                    logger.info(f"✅ Docker API found at: {url}")
+                    return url
+            except Exception as e:
+                logger.debug(f"Failed to connect to {url}: {e}")
+                continue
+    
+    # 3. Try localhost variants (for local development)
+    localhost_urls = [
+        'http://localhost:4000',
+        'http://127.0.0.1:4000',
+        'http://0.0.0.0:4000'
+    ]
+    
+    for url in localhost_urls:
+        try:
+            logger.info(f"Trying localhost: {url}")
+            resp = api_session.get(f'{url}/system/health', timeout=2)
+            if resp.status_code in [200, 404]:
+                logger.info(f"✅ Local API found at: {url}")
+                return url
+        except Exception as e:
+            logger.debug(f"Failed to connect to {url}: {e}")
+            continue
+    
+    # 4. Default fallback
+    default = 'http://web-api:4000' if is_docker else 'http://localhost:4000'
+    logger.warning(f"No API connection found, defaulting to {default}")
+    return default
 
-    try:
-        # In Docker there's often a /.dockerenv file; prefer the service DNS name
-        if os.path.exists('/.dockerenv'):
-            return 'http://api:4000'
-    except Exception:
-        pass
+# Initialize API base with retry logic
+def initialize_api_base():
+    """Try multiple times to detect a working API base URL."""
+    max_retries = 10
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        api_base = _default_api_base()
+        
+        # Test the connection
+        try:
+            test_endpoints = ['/system/health', '/basketball/teams', '/auth/users']
+            for endpoint in test_endpoints:
+                try:
+                    resp = api_session.get(f"{api_base}{endpoint}", timeout=2)
+                    if resp.status_code in [200, 201, 404]:
+                        logger.info(f"✅ API connection established at {api_base}")
+                        return api_base
+                except:
+                    continue
+        except:
+            pass
+        
+        if attempt < max_retries - 1:
+            logger.info(f"API not ready, retrying in {retry_delay} seconds... (attempt {attempt + 1}/{max_retries})")
+            time.sleep(retry_delay)
+    
+    # Final fallback
+    return api_base
 
-    # default for non-container/local dev
-    return 'http://localhost:4000'
-
-API_BASE = _default_api_base()
+# Initialize API base
+API_BASE = initialize_api_base()
 logger.info('Using API_BASE=%s', API_BASE)
 
-# Ensure modules.api_client uses the same base URL stored in Streamlit session state
-try:
-    if 'api_base_url' not in st.session_state:
-        st.session_state['api_base_url'] = API_BASE
-except Exception:
-    pass
+# Store in session state
+if 'api_base_url' not in st.session_state:
+    st.session_state['api_base_url'] = API_BASE
 
-# Default debug mode to False unless explicitly enabled
-if 'debug_mode' not in st.session_state:
-    st.session_state['debug_mode'] = False
+if 'api_connection_status' not in st.session_state:
+    st.session_state['api_connection_status'] = 'unknown'
 
-
-def _parse_endpoint_with_query(endpoint: str) -> Tuple[str, Dict[str, Any]]:
-    """Split an endpoint that may include a query string into path and params dict."""
-    if not endpoint:
-        return endpoint, {}
-    parsed = urllib.parse.urlparse(endpoint)
-    path = parsed.path
-    qs = urllib.parse.parse_qs(parsed.query)
-    # flatten values (take first)
-    params = {k: v[0] for k, v in qs.items()}
-    return path, params
-
-
-def call_get_raw(endpoint: str, params: Optional[Dict[str, Any]] = None, timeout=5):
-    """Generic GET wrapper returning parsed JSON or None."""
+# Test API connection
+def test_api_connection():
+    """Check connectivity against multiple API endpoints and set session state."""
     try:
-        path, p = _parse_endpoint_with_query(endpoint)
-        merged = {**(p or {}), **(params or {})}
-        resp = requests.get(f"{API_BASE}{path}", params=merged or None, timeout=timeout)
-        if resp.status_code in (200, 201):
-            return resp.json()
-        logger.info('GET %s returned %s', path, resp.status_code)
+        # Try multiple endpoints in case health check doesn't exist
+        test_endpoints = ['/system/health', '/basketball/teams', '/auth/users']
+        
+        for endpoint in test_endpoints:
+            try:
+                resp = api_session.get(f"{API_BASE}{endpoint}", timeout=3)
+                if resp.status_code in [200, 201, 404]:
+                    st.session_state['api_connection_status'] = 'connected'
+                    return True
+            except Exception as e:
+                logger.debug(f"Test connection failed for {endpoint}: {e}")
+                continue
+        
+        st.session_state['api_connection_status'] = 'disconnected'
+        return False
+        
     except Exception as e:
-        logger.exception('Exception in call_get_raw(%s): %s', endpoint, e)
-    return None
+        logger.error(f"API connection test failed: {e}")
+        st.session_state['api_connection_status'] = 'disconnected'
+        return False
 
+# Enhanced GET request with connection fallback
+def call_get_raw(endpoint: str, params: Optional[Dict[str, Any]] = None, timeout=5):
+    """Wrapper for GET requests that respects session state and API_BASE."""
+    # If disconnected, try to reconnect with new base
+    if st.session_state.get('api_connection_status') == 'disconnected':
+        new_base = _default_api_base()
+        if new_base != API_BASE:
+            st.session_state['api_base_url'] = new_base
+            globals()['API_BASE'] = new_base
+            logger.info(f"Switched API_BASE to: {new_base}")
+    
+    try:
+        if endpoint.startswith('http'):
+            url = endpoint
+        else:
+            url = f"{API_BASE}{endpoint}"
+        
+        resp = api_session.get(url, params=params, timeout=timeout)
+        
+        if resp.status_code in (200, 201):
+            st.session_state['api_connection_status'] = 'connected'
+            return resp.json()
+        elif resp.status_code == 404:
+            logger.warning(f'Endpoint not found: {endpoint}')
+            return None
+        else:
+            logger.warning(f'GET {endpoint} returned {resp.status_code}')
+            return None
+            
+    except requests.exceptions.ConnectionError:
+        st.session_state['api_connection_status'] = 'disconnected'
+        logger.error(f'Connection error for {endpoint}')
+        return None
+        
+    except requests.exceptions.Timeout:
+        logger.error(f'Timeout error for {endpoint}')
+        return None
+        
+    except Exception as e:
+        logger.error(f'Unexpected error in call_get_raw: {e}')
+        return None
+
+# Import or define API client functions
+try:
+    from modules.api_client import get_users, get_teams as api_get_teams, assign_team as api_assign_team
+except ImportError:
+    logger.warning("Could not import from modules.api_client, using local implementations")
+    
+    def get_users(role=None, timeout=5):
+        params = {'role': role} if role else None
+        return call_get_raw('/auth/users', params=params, timeout=timeout)
+    
+    def api_get_teams(timeout=5):
+        return call_get_raw('/basketball/teams', timeout=timeout)
+    
+    def api_assign_team(user_id, team_id, timeout=5):
+        try:
+            resp = api_session.put(
+                f"{API_BASE}/auth/users/{user_id}/assign-team",
+                json={'team_id': team_id},
+                timeout=timeout
+            )
+            if resp.status_code == 200:
+                return resp.json().get('user') if resp.json() else None
+        except:
+            return None
 
 def get_users_for_role(role, timeout=5):
-    """Return a list of users for the given role by calling the backend API.
-
-    This function is tolerant to a variety of response shapes returned by different
-    backends (list of dicts, list of strings, dict wrappers, id->user maps, etc.)
-    and will normalize simple scalar lists into minimal user dictionaries so the
-    UI can render usable labels instead of forcing the manual debug fallback.
-    """
+    """Return a list of users for the given role with enhanced error handling."""
+    
+    # Check API connection status first
+    if st.session_state.get('api_connection_status') == 'disconnected':
+        if not test_api_connection():
+            logger.warning(f"API disconnected, cannot fetch users for role: {role}")
+            return []
+    
     try:
+        # Role aliases for flexibility
         alias_map = {
             'superfan': 'fan',
             'data_engineer': 'admin',
             'head_coach': 'coach',
             'general_manager': 'gm',
         }
-
-        def _extract_users_from_json(data):
-            """Normalize various JSON shapes into a list of user dicts or return None."""
-            if not data:
-                return None
-
-            # If it's already a list
-            if isinstance(data, list):
-                # list of dicts -> good
-                if all(isinstance(i, dict) for i in data):
-                    return data
-                # list of scalars (e.g. ['alice','bob']) -> convert to user dicts
-                if all(not isinstance(i, dict) for i in data):
-                    out = []
-                    for idx, val in enumerate(data):
-                        out.append({'username': str(val), 'id': idx})
-                    return out
-                return None
-
-            # If it's a dict, try common wrapper keys first
-            if isinstance(data, dict):
-                for key in ('users', 'results', 'items', 'records', 'data'):
-                    val = None
-                    for k, v in data.items():
-                        if k.lower() == key:
-                            val = v
-                            break
-                    if val is not None:
-                        # If the wrapped value is a list, normalize it
-                        if isinstance(val, list):
-                            if all(isinstance(i, dict) for i in val):
-                                return val
-                            # list of scalars inside wrapper
-                            out = []
-                            for idx, item in enumerate(val):
-                                if isinstance(item, dict):
-                                    out.append(item)
-                                else:
-                                    out.append({'username': str(item), 'id': idx})
-                            return out
-                        # If the wrapper value is a dict that itself maps ids->user
-                        if isinstance(val, dict):
-                            dict_vals = [v2 for v2 in val.values() if isinstance(v2, dict)]
-                            if dict_vals:
-                                return dict_vals
-
-                # If the top-level dict looks like id->user map or username->user map
-                dict_vals = [v for v in data.values() if isinstance(v, dict)]
-                if dict_vals and all(('username' in v or 'user_id' in v or 'id' in v) for v in dict_vals):
-                    return dict_vals
-
-                # If the dict maps simple scalars (e.g. {'alice': 'Alice Smith'}) treat keys as usernames
-                if all(not isinstance(v, (dict, list)) for v in data.values()):
-                    out = []
-                    for k, v in data.items():
-                        out.append({'username': str(k), 'display': str(v)})
-                    return out
-
-            return None
-
+        
+        # Try primary role first
         candidates = [role]
         if role in alias_map:
             candidates.append(alias_map[role])
-        if '_' in role:
-            candidates.append(role.replace('_', ' '))
-
-        tried = set()
-        for c in candidates:
-            if not c or c in tried:
-                continue
-            tried.add(c)
+        
+        for candidate in candidates:
             try:
-                data = get_users(role=c, timeout=timeout)
-                if data is None:
-                    logger.debug('api_client.get_users returned None for role=%s', c)
-                    continue
-                users = _extract_users_from_json(data)
-                if users:
-                    return users
-                else:
-                    logger.debug('get_users_for_role: unexpected JSON shape for role=%s; raw=%s', c, type(data))
-            except Exception:
-                logger.exception('Exception while fetching users for role %s', c)
-
-        # Final fallback: fetch all users and filter client-side (more permissive)
-        try:
-            data = get_users(timeout=timeout)
-            if not data:
-                return []
-            users = _extract_users_from_json(data) or []
-            if users:
-                acceptable = {role}
-                if role in alias_map:
-                    acceptable.add(alias_map[role])
-                acceptable = {v.lower() for v in acceptable if v}
-
-                filtered = []
-                for u in users:
-                    r = ''
-                    try:
-                        r = (u.get('role') or u.get('user_role') or u.get('type') or '')
-                    except Exception:
-                        r = ''
-                    if isinstance(r, str) and r.lower() in acceptable:
-                        filtered.append(u)
-
-                # If filtering produced results, return them; otherwise, return the normalized users
-                return filtered if filtered else users
-        except Exception:
-            logger.exception('Exception while fetching all users for fallback')
-
+                data = call_get_raw('/auth/users', {'role': candidate}, timeout)
+                
+                if data:
+                    users = []
+                    if isinstance(data, dict):
+                        users = data.get('users', [])
+                    elif isinstance(data, list):
+                        users = data
+                    
+                    # Filter and normalize users
+                    normalized_users = []
+                    for user in users:
+                        if isinstance(user, dict):
+                            if not user.get('username'):
+                                continue
+                            
+                            user_role = (user.get('role') or '').lower()
+                            if user_role in [role.lower(), alias_map.get(role, '').lower()]:
+                                normalized_users.append(user)
+                    
+                    if normalized_users:
+                        return normalized_users
+                        
+            except Exception as e:
+                logger.error(f"Error fetching users for role {candidate}: {e}")
+                continue
+        
+        # Try getting all users as fallback
+        all_users_data = call_get_raw('/auth/users', timeout=timeout)
+        if all_users_data:
+            all_users = []
+            if isinstance(all_users_data, dict):
+                all_users = all_users_data.get('users', [])
+            elif isinstance(all_users_data, list):
+                all_users = all_users_data
+            
+            filtered = []
+            for user in all_users:
+                if isinstance(user, dict):
+                    user_role = (user.get('role') or '').lower()
+                    if user_role in [role.lower(), alias_map.get(role, '').lower()]:
+                        filtered.append(user)
+            
+            return filtered
+            
     except Exception as e:
-        logger.exception('Exception in get_users_for_role(%s): %s', role, e)
-    logger.info('get_users_for_role returned no users for role %s', role)
+        logger.exception(f'Critical error in get_users_for_role: {e}')
+    
     return []
-
 
 def get_teams(timeout=5):
-    """Return list of teams from the backend API."""
+    """Return teams list from backend API."""
     try:
-        resp = requests.get(f"{API_BASE}/basketball/teams", timeout=timeout)
-        if resp.status_code == 200:
-            data = resp.json()
-            return data.get('teams', []) if isinstance(data, dict) else []
-        else:
-            logger.warning('get_teams returned status %s (%s)', resp.status_code, getattr(resp, 'text', None))
+        data = call_get_raw('/basketball/teams', timeout=timeout)
+        if isinstance(data, dict) and 'teams' in data:
+            return data.get('teams', [])
+        elif isinstance(data, list):
+            return data
     except Exception as e:
-        logger.exception('Exception in get_teams: %s', e)
+        logger.error(f'Error fetching teams: {e}')
     return []
 
-
 def assign_team(user_id, team_id, timeout=5):
-    """Assign a team to a user via the auth API; returns the updated user object on success or None."""
+    """Assign a team to a user via the auth API."""
     try:
-        resp = requests.put(f"{API_BASE}/auth/users/{user_id}/assign-team", json={'team_id': team_id}, timeout=timeout)
+        resp = api_session.put(
+            f"{API_BASE}/auth/users/{user_id}/assign-team", 
+            json={'team_id': team_id}, 
+            timeout=timeout
+        )
         if resp.status_code == 200:
             data = resp.json()
             return data.get('user') if isinstance(data, dict) else None
-        else:
-            logger.warning('assign_team returned status %s: %s', resp.status_code, getattr(resp, 'text', None))
     except Exception as e:
-        logger.exception('Exception in assign_team: %s', e)
+        logger.error(f'Error assigning team: {e}')
     return None
 
-
 def _safe_rerun():
-    """Rerun the Streamlit app in a way that's compatible across Streamlit versions.
-
-    Strategy:
-    1. Prefer st.experimental_rerun() when available (immediate rerun).
-    2. Then try assigning to st.query_params (public API) which triggers a rerun.
-    3. As a last resort, mutate session_state and call st.stop() to end this run; the state change will persist.
-    """
-    # 1) immediate preferred API
+    """Rerun Streamlit app safely across versions."""
     try:
-        if hasattr(st, 'experimental_rerun'):
-            return st.experimental_rerun()
-    except Exception:
-        pass
-
-    # 2) try updating query params (public API) - this normally triggers a rerun
-    try:
-        st.query_params = {"_refresh": int(time.time())}
-        return
-    except Exception:
-        pass
-
-    # 3) fallback: mutate session_state and stop (ensures state is set; user can refresh)
-    try:
-        st.session_state['_refresh'] = int(time.time())
-        try:
-            # stop this run so Streamlit can begin a new one
+        if hasattr(st, 'rerun'):
+            st.rerun()
+        elif hasattr(st, 'experimental_rerun'):
+            st.experimental_rerun()
+        else:
+            st.session_state['_refresh'] = int(time.time())
             st.stop()
-        except Exception:
-            pass
-        return
-    except Exception:
-        # nothing left we can do
-        try:
-            st.stop()
-        except Exception:
-            pass
+    except:
+        st.stop()
 
-# streamlit supports reguarl and wide layout (how the controls
-# are organized/displayed on the screen).
-st.set_page_config(layout = 'wide')
+# Page configuration
+st.set_page_config(layout='wide', page_title='BallWatch Basketball Analytics')
 
-# If a user is at this page, we assume they are not 
-# authenticated.  So we change the 'authenticated' value
-# in the streamlit session_state to false. 
-# Only set the default if the key is missing so we don't clobber a login.
+# Initialize session state
 if 'authenticated' not in st.session_state:
     st.session_state['authenticated'] = False
 
-# Remove debug mode defaults and banners (production-safe)
-# Debug UI removed; use server logs for troubleshooting
+if 'debug_mode' not in st.session_state:
+    st.session_state['debug_mode'] = False
 
-# Use the SideBarLinks function from src/modules/nav.py to control
-# the links displayed on the left-side panel. 
-# IMPORTANT: ensure src/.streamlit/config.toml sets
-# showSidebarNavigation = false in the [client] section
+# Sidebar navigation
 SideBarLinks(show_home=True)
 
-# Page title
-st.title('BallWatch: Basketball Analytics')
+# Page title with connection status
+col1, col2 = st.columns([4, 1])
+with col1:
+    st.title('BallWatch: Basketball Analytics')
+with col2:
+    if st.session_state.get('api_connection_status') == 'connected':
+        st.success('🟢 Connected')
+    elif st.session_state.get('api_connection_status') == 'disconnected':
+        st.error('🔴 Disconnected')
+        if st.button('Retry'):
+            if test_api_connection():
+                _safe_rerun()
+    else:
+        st.info('⚪ Checking...')
+        test_api_connection()
 
-# ***************************************************
-#    The major content of this page
-# ***************************************************
-
-# Add minimal CSS for the home page to style persona cards
+# Add CSS for persona cards
 st.markdown('''
 <style>
 .home-grid { display:flex; gap:20px; flex-wrap:wrap; }
@@ -338,7 +397,7 @@ st.markdown('''
 </style>
 ''', unsafe_allow_html=True)
 
-# Small mapping for persona visual accents
+# Persona visual accents
 _persona_accents = {
     'Superfan': {'emoji': '🏀', 'color': '#7C3AED'},
     'Data Engineer': {'emoji': '🛠️', 'color': '#059669'},
@@ -346,34 +405,33 @@ _persona_accents = {
     'General Manager': {'emoji': '🏢', 'color': '#F97316'},
 }
 
-# Create persona definitions (IDs added, no hard-coded user names)
+# User options definition
 user_options = {
     "Superfan": {
         "persona_id": "p_superfan",
         "role": "superfan",
         "page": "pages/10_Superfan_Home.py",
-        "bio": "A passionate basketball enthusiast who craves deeper insights beyond mainstream sports media. Frustrated by surface-level analysis and generic commentary, this user seeks advanced metrics and data-driven perspectives to truly understand player performance and team dynamics. As someone who enjoys sports betting, they constantly struggle to find reliable analytical edges that go beyond basic stats and gut feelings."
+        "bio": "A passionate basketball enthusiast who craves deeper insights beyond mainstream sports media. Frustrated by surface-level analysis and generic commentary, this user seeks advanced metrics and data-driven perspectives to truly understand player performance and team dynamics."
     },
     "Data Engineer": {
         "persona_id": "p_data_engineer",
         "role": "data_engineer",
         "page": "pages/20_Data_Engineer_Home.py",
-        "bio": "An experienced data professional specializing in real-time sports analytics infrastructure. Daily challenges include maintaining data accuracy across multiple live feeds, managing pipeline failures during critical game moments, and scaling systems to handle increasing data volumes. Often pressured to deliver clean, reliable datasets while troubleshooting complex ingestion issues and optimizing query performance for time-sensitive analytics requests."
+        "bio": "An experienced data professional specializing in real-time sports analytics infrastructure. Daily challenges include maintaining data accuracy across multiple live feeds, managing pipeline failures during critical game moments, and scaling systems to handle increasing data volumes."
     },
     "Head Coach": {
         "persona_id": "p_head_coach",
         "role": "head_coach",
         "page": "pages/30_Head_Coach_Home.py",
-        "bio": "A team leader who needs actionable insights to make strategic decisions quickly. Overwhelmed by dense statistical reports and complex spreadsheets that are difficult to interpret during game preparation and halftime adjustments. Struggles to translate analytical findings into clear, confident communication with players while making split-second tactical decisions backed by reliable data rather than intuition alone."
+        "bio": "A team leader who needs actionable insights to make strategic decisions quickly. Overwhelmed by dense statistical reports and complex spreadsheets that are difficult to interpret during game preparation and halftime adjustments."
     },
     "General Manager": {
         "persona_id": "p_general_manager",
         "role": "general_manager",
         "page": "pages/40_General_Manager_Home.py",
-        "bio": "A front office executive tasked with rebuilding a struggling franchise through data-driven decision making. Faces pressure to identify undervalued talent, optimize roster construction, and justify expensive trades or signings to ownership. Challenged by fragmented analytics tools, inconsistent reporting formats, and the need to balance advanced metrics with traditional scouting insights when making high-stakes personnel decisions."
+        "bio": "A front office executive tasked with rebuilding a struggling franchise through data-driven decision making. Faces pressure to identify undervalued talent, optimize roster construction, and justify expensive trades or signings to ownership."
     }
 }
-
 
 # Helper: format a display label for a user
 def _format_user_label(u):
@@ -391,8 +449,7 @@ def _format_user_label(u):
 
     return f"{display_name} — {username} (id:{uid})"
 
-
-# Helper: set session state and navigate after a successful login
+# Helper: set session state and navigate after successful login
 def _complete_login(chosen, selected_label, opts):
     try:
         st.session_state['authenticated'] = True
@@ -400,7 +457,8 @@ def _complete_login(chosen, selected_label, opts):
         st.session_state['user_id'] = chosen.get('user_id') or chosen.get('id')
         st.session_state['username'] = chosen.get('username')
         st.session_state['first_name'] = chosen.get('first_name') or (selected_label.split(' — ')[0] if selected_label else '')
-        # set team_id in session if present on user object
+        
+        # Set team_id in session if present
         try:
             team_val = chosen.get('team_id')
             if team_val is None:
@@ -413,7 +471,7 @@ def _complete_login(chosen, selected_label, opts):
         except Exception:
             st.session_state['team_id'] = None
 
-        # If a team_id is present, try to resolve and store team_name in session
+        # If a team_id is present, try to resolve and store team_name
         try:
             team_id = st.session_state.get('team_id')
             if team_id:
@@ -474,6 +532,7 @@ def _complete_login(chosen, selected_label, opts):
         except Exception:
             pass
 
+        # Navigate to appropriate page
         try:
             if hasattr(st, 'switch_page'):
                 st.switch_page(opts.get('page'))
@@ -485,98 +544,35 @@ def _complete_login(chosen, selected_label, opts):
     except Exception as e:
         logger.exception('Exception in _complete_login: %s', e)
 
-# Helper: try to fetch users for a role from backend; do NOT use any fallback demo data
+# Helper: fetch users for a role from backend
 def fetch_users_for_role(role):
-    """Fetch users for a role and provide extra debug logging when no users are returned.
-
-    This wraps get_users_for_role so we can log the raw API response (via api_client.get_users)
-    when the normalized result is empty. If Streamlit session_state contains 'debug_mode'
-    the raw response will also be shown in the UI to aid troubleshooting.
-    """
+    """Fetch users for a role with extra debug logging when no users are returned."""
     users = get_users_for_role(role)
     if users:
         return users
 
-    # no users found — capture more information from the underlying API for debugging
+    # No users found - provide diagnostics
     raw = None
-    status_hint = ''
-    direct_info = None
     try:
-        logger.info('No users returned for role=%s from get_users_for_role; fetching raw api response...', role)
-        # First, try the existing api_client.get_users() (may be None)
-        try:
-            raw = get_users(role=role, timeout=5)
-            logger.info('Raw get_users response for role=%s: %s', role, raw)
-            logger.debug('get_users raw response for role=%s: %s', role, raw)
-        except Exception as e:
-            logger.exception('Exception calling api_client.get_users for role %s: %s', role, e)
-            raw = f'Exception while calling api_client.get_users: {e}'
-
-        # Next, attempt a direct HTTP GET so we can capture status code and body for diagnostics
-        try:
-            base = st.session_state.get('api_base_url') or API_BASE
-            direct_url = f"{base.rstrip('/')}/auth/users"
-            params = {'role': role} if role else None
-            logger.info('Attempting direct GET %s with params=%s', direct_url, params)
-            resp = requests.get(direct_url, params=params, timeout=5)
-            try:
-                # try to parse JSON, fall back to text
-                parsed = resp.json()
-            except Exception:
-                parsed = resp.text
-            direct_info = {'status_code': resp.status_code, 'body': parsed}
-            logger.info('Direct GET %s returned %s', direct_url, direct_info)
-        except Exception as e:
-            logger.exception('Direct HTTP fetch to API failed: %s', e)
-            direct_info = {'exception': repr(e)}
-
-    except Exception as e:
-        logger.exception('Exception while fetching raw users for role %s: %s', role, e)
-        raw = f'Exception: {e}'
-
-    # Provide production-friendly UI guidance with an opt-in diagnostics expander
-    try:
-        # Avoid showing debug data unless explicitly requested via debug_mode or the user expands the details
+        logger.info('No users returned for role=%s from get_users_for_role', role)
+        
+        # Show error with expandable diagnostics
         st.error('No users available for this role. Please contact your system administrator.')
-
-        exp_key = f"users_diag_{role}"
+        
         with st.expander('Diagnostics (click to view)', expanded=False):
-            try:
-                st.markdown(f"**API Base:** `{st.session_state.get('api_base_url')}`")
-            except Exception:
-                pass
-            try:
-                st.markdown('**Raw /auth/users response (api_client.get_users):**')
-                st.write(raw)
-            except Exception:
-                st.write(repr(raw))
-
-            try:
-                st.markdown('**Direct HTTP fetch to /auth/users:**')
-                st.write(direct_info)
-            except Exception:
-                st.write(repr(direct_info))
-
-            # If debug_mode is enabled, show a helpful cURL to reproduce the request
-            try:
-                if st.session_state.get('debug_mode', False):
-                    base = st.session_state.get('api_base_url') or API_BASE
-                    curl = f"curl -s -X GET '{base.rstrip('/')}/auth/users?role={role}'"
-                    st.code(curl, language='bash')
-            except Exception:
-                pass
-
-            # Provide a retry control (unique per role)
+            st.markdown(f"**API Base:** `{st.session_state.get('api_base_url')}`")
+            st.markdown(f"**Connection Status:** {st.session_state.get('api_connection_status')}")
+            st.markdown(f"**Role Requested:** {role}")
+            
             retry_key = f"diag_retry_{role}"
             if st.button('Retry fetch', key=retry_key):
                 _safe_rerun()
     except Exception:
-        # If Streamlit UI calls fail for any reason, just log and continue
         logger.exception('Failed to render diagnostics UI for role %s', role)
 
     return []
 
-# Consolidated persona renderer
+# Persona renderer
 def _render_persona(title, opts):
     accent = _persona_accents.get(title, {'emoji': '👤', 'color': '#6B7280'})
 
@@ -584,14 +580,22 @@ def _render_persona(title, opts):
     st.markdown(f"### {accent['emoji']}  {title}")
     st.write(opts['bio'])
 
+    # Check connection before attempting to fetch users
+    if st.session_state.get('api_connection_status') == 'disconnected':
+        st.warning('⚠️ API connection unavailable. Please check your backend service.')
+        if st.button(f'Retry Connection ({title})', key=f'retry_{opts["role"]}'):
+            if test_api_connection():
+                _safe_rerun()
+        return
+
     # Fetch role-specific users
-    role_users = fetch_users_for_role(opts['role'])
+    with st.spinner('Loading users...'):
+        role_users = fetch_users_for_role(opts['role'])
 
     if role_users:
         user_map = {}
         labels = []
         for u in role_users:
-            # use the centralized label formatter (no team text)
             label = _format_user_label(u)
             user_map[label] = u
             labels.append(label)
@@ -601,7 +605,7 @@ def _render_persona(title, opts):
 
         cols_footer = st.columns([3,1])
         with cols_footer[0]:
-            selected_label = st.selectbox('', options=labels, key=sel_key, label_visibility='collapsed')
+            selected_label = st.selectbox('Select User', options=labels, key=sel_key, label_visibility='collapsed')
 
         with cols_footer[1]:
             if st.button('Login', key=btn_key):
@@ -611,8 +615,7 @@ def _render_persona(title, opts):
                 else:
                     st.error('Please select a user before logging in')
     else:
-        # No users returned from API.
-        # In production we must not surface a debug login path.
+        # No users returned from API
         if st.session_state.get('debug_mode', False):
             st.warning('No users found for this role. You can enter a username to continue (debug mode)')
             cols = st.columns([3,1])
@@ -627,22 +630,16 @@ def _render_persona(title, opts):
                     else:
                         st.error('Please enter a username to continue')
         else:
-            # Production behavior: show clear error, do not allow manual bypass.
-            st.error('No users available for this role. Please contact your system administrator.')
-            # Provide an explicit retry control for the user to attempt fetching again.
+            st.info('No users available for this role. Please ensure the backend service is running and properly configured.')
             retry_key = f"retry_{opts['role']}"
             if st.button('Retry', key=retry_key):
                 _safe_rerun()
 
-    # small spacing between personas
+    # Small spacing between personas
     st.markdown('<div style="height:18px"></div>', unsafe_allow_html=True)
 
 def _complete_login_from_input(role, input_name, opts):
-    """Minimal login path when no user objects are available from the API.
-
-    This sets minimal session_state and navigates to the persona page so the
-    UI remains usable when the backend returns no users. Intended for debugging.
-    """
+    """Minimal login path when no user objects are available from the API."""
     try:
         st.session_state['authenticated'] = True
         st.session_state['role'] = role
@@ -688,8 +685,13 @@ if st.session_state.get('authenticated', False):
 
 # If not authenticated, show persona login cards
 if not st.session_state.get('authenticated', False):
+    # Test connection on page load
+    if 'connection_tested' not in st.session_state:
+        with st.spinner('Connecting to backend service...'):
+            test_api_connection()
+        st.session_state['connection_tested'] = True
+    
     st.markdown("## Choose your role to access BallWatch:")
-    st.markdown('<div class="home-grid">', unsafe_allow_html=True)
     
     # Create columns for persona cards (2x2 grid)
     col1, col2 = st.columns(2)
@@ -711,5 +713,3 @@ if not st.session_state.get('authenticated', False):
     with col4:
         if len(personas) > 3:
             _render_persona(personas[3], user_options[personas[3]])
-    
-    st.markdown('</div>', unsafe_allow_html=True)

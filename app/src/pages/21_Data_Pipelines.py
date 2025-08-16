@@ -427,3 +427,5 @@ if loads and len(loads) > 0:
 
 else:
     st.info("No data loads found. Try adjusting your filters or check system connectivity.")
+
+"""Data Pipelines page: manage ETL processes."""

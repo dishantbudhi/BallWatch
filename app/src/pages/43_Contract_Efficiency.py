@@ -1,3 +1,5 @@
+"""Contract efficiency analytics and charts."""
+
 import logging
 logger = logging.getLogger(__name__)
 

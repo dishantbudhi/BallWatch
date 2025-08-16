@@ -1,14 +1,9 @@
-########################################################
-# Analytics Blueprint
-# Handles performance analytics, player matchups, and statistical comparisons
-# for the BallWatch basketball analytics platform
-########################################################
+"""Analytics blueprint - performance and comparison endpoints."""
 
 from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db
 
-#------------------------------------------------------------
-# Create a new Blueprint object for analytics-related routes
+# Create blueprint
 analytics = Blueprint('analytics', __name__)
 
 
@@ -155,7 +150,7 @@ def get_player_matchups():
             elif advantage == 'Player2':
                 recommendation = f"Avoid giving {player2_id} wide-open opportunities; use help defense and double-team in pick-and-rolls."
             else:
-                recommendation = "Matchup appears even — focus on limiting turnovers and contesting shots."
+                recommendation = "Matchup appears even â€” focus on limiting turnovers and contesting shots."
         except Exception:
             player1_off_rating = player2_off_rating = player1_def_eff = player2_def_eff = 0
             advantage = 'Unknown'
@@ -431,6 +426,7 @@ def get_lineup_configurations():
     try:
         current_app.logger.info('GET /lineup-configurations handler started')
 
+        # Extract and validate parameters
         team_id = request.args.get('team_id', type=int)
         min_games = request.args.get('min_games', 5, type=int)
         season = request.args.get('season')
@@ -440,7 +436,7 @@ def get_lineup_configurations():
 
         cursor = db.get_db().cursor()
 
-        # Simplified query: join player names for each lineup and return top lineups by plus_minus
+        # FIX: Corrected query to ensure all players in a lineup belong to the selected team.
         lineup_query = '''
             SELECT
                 lc.lineup_id,
@@ -449,15 +445,20 @@ def get_lineup_configurations():
                 lc.offensive_rating,
                 lc.defensive_rating
             FROM LineupConfiguration lc
-            LEFT JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
-            LEFT JOIN Players p ON pl.player_id = p.player_id
+            JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
+            JOIN Players p ON pl.player_id = p.player_id
             WHERE lc.team_id = %s
             GROUP BY lc.lineup_id, lc.plus_minus, lc.offensive_rating, lc.defensive_rating
+            HAVING SUM(
+                CASE WHEN pl.player_id IN (
+                    SELECT player_id FROM TeamsPlayers WHERE team_id = %s AND left_date IS NULL
+                ) THEN 0 ELSE 1 END
+            ) = 0
             ORDER BY lc.plus_minus DESC
-            LIMIT 10
+            LIMIT 10;
         '''
 
-        cursor.execute(lineup_query, (team_id,))
+        cursor.execute(lineup_query, [team_id, team_id])
         lineup_stats = cursor.fetchall()
 
         response_data = {
@@ -607,22 +608,20 @@ def get_season_summaries():
     except Exception as e:
         current_app.logger.error(f'Error in get_season_summaries: {str(e)}')
         return make_response(jsonify({"error": "Failed to fetch season summary"}), 500)
-
-
-#------------------------------------------------------------
-# Get situational performance data [New Endpoint]
+    
+# Enhanced Situational Performance Route
 @analytics.route('/situational-performance', methods=['GET'])
 def get_situational_performance():
     """
-    Get situational team performance (clutch, quarter-by-quarter, close games).
-
+    Get comprehensive situational team performance with actual game data.
+    
     Query params:
       - team_id (required)
       - season (optional)
-      - last_n_games (optional)
-
+      - last_n_games (optional, default 20)
+    
     Returns:
-      JSON with situational aggregates.
+      JSON with situational performance metrics derived from actual games.
     """
     try:
         current_app.logger.info('GET /situational-performance handler started')
@@ -638,73 +637,160 @@ def get_situational_performance():
         situational = {
             'clutch': None,
             'by_quarter': None,
-            'close_games': None
+            'close_games': None,
+            'scoring_runs': None,
+            'home_away_splits': None,
+            'win_loss_margins': None
         }
 
-        # Clutch: average metrics from ClutchStats (if table populated)
-        try:
-            cursor.execute('''
-                SELECT
-                    ROUND(AVG(cs.off_rating),1) AS off_rating,
-                    ROUND(AVG(cs.def_rating),1) AS def_rating,
-                    ROUND(AVG(cs.net_rating),1) AS net_rating,
-                    COUNT(*) AS games
-                FROM ClutchStats cs
-                WHERE cs.team_id = %s
-            ''', (team_id,))
-            row = cursor.fetchone()
-            if row and row.get('off_rating') is not None:
+        # Get recent games for analysis
+        base_game_query = '''
+            SELECT 
+                g.game_id,
+                g.game_date,
+                g.home_team_id,
+                g.away_team_id,
+                g.home_score,
+                g.away_score,
+                CASE 
+                    WHEN g.home_team_id = %s THEN 'home'
+                    ELSE 'away'
+                END as home_away,
+                CASE 
+                    WHEN g.home_team_id = %s THEN g.home_score
+                    ELSE g.away_score
+                END as team_score,
+                CASE 
+                    WHEN g.home_team_id = %s THEN g.away_score
+                    ELSE g.home_score
+                END as opp_score
+            FROM Game g
+            WHERE (g.home_team_id = %s OR g.away_team_id = %s)
+            AND g.status = 'completed'
+        '''
+        
+        params = [team_id, team_id, team_id, team_id, team_id]
+        
+        if season:
+            base_game_query += ' AND g.season = %s'
+            params.append(season)
+            
+        base_game_query += ' ORDER BY g.game_date DESC LIMIT %s'
+        params.append(last_n_games)
+        
+        cursor.execute(base_game_query, params)
+        recent_games = cursor.fetchall()
+
+        if recent_games:
+            # Calculate clutch performance (games decided by 5 points or less)
+            close_games = [g for g in recent_games if abs(g['team_score'] - g['opp_score']) <= 5]
+            if close_games:
+                clutch_wins = sum(1 for g in close_games if g['team_score'] > g['opp_score'])
+                clutch_losses = len(close_games) - clutch_wins
+                avg_clutch_score = sum(g['team_score'] for g in close_games) / len(close_games)
+                avg_clutch_opp = sum(g['opp_score'] for g in close_games) / len(close_games)
+                
                 situational['clutch'] = {
-                    'off_rating': row['off_rating'],
-                    'def_rating': row['def_rating'],
-                    'net_rating': row['net_rating'],
-                    'games': row['games']
+                    'games': len(close_games),
+                    'wins': clutch_wins,
+                    'losses': clutch_losses,
+                    'win_pct': round((clutch_wins / len(close_games)) * 100, 1) if close_games else 0,
+                    'avg_score': round(avg_clutch_score, 1),
+                    'avg_opp_score': round(avg_clutch_opp, 1),
+                    'net_rating': round(avg_clutch_score - avg_clutch_opp, 1)
                 }
-        except Exception:
-            situational['clutch'] = None
+            
+            # Calculate home/away splits
+            home_games = [g for g in recent_games if g['home_away'] == 'home']
+            away_games = [g for g in recent_games if g['home_away'] == 'away']
+            
+            situational['home_away_splits'] = {
+                'home': {
+                    'games': len(home_games),
+                    'wins': sum(1 for g in home_games if g['team_score'] > g['opp_score']),
+                    'avg_score': round(sum(g['team_score'] for g in home_games) / len(home_games), 1) if home_games else 0,
+                    'avg_opp_score': round(sum(g['opp_score'] for g in home_games) / len(home_games), 1) if home_games else 0
+                },
+                'away': {
+                    'games': len(away_games),
+                    'wins': sum(1 for g in away_games if g['team_score'] > g['opp_score']),
+                    'avg_score': round(sum(g['team_score'] for g in away_games) / len(away_games), 1) if away_games else 0,
+                    'avg_opp_score': round(sum(g['opp_score'] for g in away_games) / len(away_games), 1) if away_games else 0
+                }
+            }
+            
+            # Win/Loss margin analysis
+            wins = [g for g in recent_games if g['team_score'] > g['opp_score']]
+            losses = [g for g in recent_games if g['team_score'] < g['opp_score']]
+            
+            situational['win_loss_margins'] = {
+                'wins': {
+                    'count': len(wins),
+                    'avg_margin': round(sum(g['team_score'] - g['opp_score'] for g in wins) / len(wins), 1) if wins else 0,
+                    'max_margin': max((g['team_score'] - g['opp_score'] for g in wins), default=0),
+                    'blowout_wins': sum(1 for g in wins if g['team_score'] - g['opp_score'] >= 20)
+                },
+                'losses': {
+                    'count': len(losses),
+                    'avg_margin': round(sum(g['opp_score'] - g['team_score'] for g in losses) / len(losses), 1) if losses else 0,
+                    'max_margin': max((g['opp_score'] - g['team_score'] for g in losses), default=0),
+                    'blowout_losses': sum(1 for g in losses if g['opp_score'] - g['team_score'] >= 20)
+                }
+            }
+            
+            # Scoring patterns - last 10 games
+            scoring_patterns = []
+            for g in recent_games[:10]:
+                scoring_patterns.append({
+                    'game_date': str(g['game_date']),
+                    'team_score': g['team_score'],
+                    'opp_score': g['opp_score'],
+                    'margin': g['team_score'] - g['opp_score'],
+                    'result': 'W' if g['team_score'] > g['opp_score'] else 'L'
+                })
+            situational['scoring_runs'] = scoring_patterns
+            
+            # Close games list
+            situational['close_games'] = [{
+                'game_date': str(g['game_date']),
+                'team_score': g['team_score'],
+                'opp_score': g['opp_score'],
+                'margin': g['team_score'] - g['opp_score'],
+                'result': 'W' if g['team_score'] > g['opp_score'] else 'L'
+            } for g in close_games]
 
-        # Quarter-by-quarter: simple aggregation from TeamQuarterStats
-        try:
-            cursor.execute('''
-                SELECT
-                    tq.quarter,
-                    ROUND(AVG(tq.points_for),1) AS avg_points_for,
-                    ROUND(AVG(tq.points_against),1) AS avg_points_against
-                FROM TeamQuarterStats tq
-                WHERE tq.team_id = %s
-                GROUP BY tq.quarter
-                ORDER BY tq.quarter
-            ''', (team_id,))
-            q_rows = cursor.fetchall()
-            if q_rows:
-                situational['by_quarter'] = q_rows
-        except Exception:
-            situational['by_quarter'] = None
-
-        # Close games: games decided by 5 points or less
-        try:
-            cursor.execute('''
-                SELECT
-                    g.game_id,
-                    g.game_date,
-                    CASE WHEN g.home_team_id = %s THEN g.home_score ELSE g.away_score END AS team_score,
-                    CASE WHEN g.home_team_id = %s THEN g.away_score ELSE g.home_score END AS opp_score
-                FROM Game g
-                WHERE (g.home_team_id = %s OR g.away_team_id = %s)
-                AND ABS(g.home_score - g.away_score) <= 5
-                AND g.status = 'completed'
-                ORDER BY g.game_date DESC
-                LIMIT %s
-            ''', (team_id, team_id, team_id, team_id, last_n_games))
-            close_rows = cursor.fetchall()
-            if close_rows:
-                situational['close_games'] = close_rows
-        except Exception:
-            situational['close_games'] = None
+        # Get player performance in clutch (optional enhancement)
+        if close_games:
+            game_ids = [g['game_id'] for g in close_games]
+            if game_ids:
+                placeholders = ','.join(['%s'] * len(game_ids))
+                cursor.execute(f'''
+                    SELECT 
+                        p.first_name,
+                        p.last_name,
+                        p.position,
+                        ROUND(AVG(pgs.points), 1) as avg_points,
+                        ROUND(AVG(pgs.plus_minus), 1) as avg_plus_minus,
+                        COUNT(pgs.game_id) as games_played
+                    FROM PlayerGameStats pgs
+                    JOIN Players p ON pgs.player_id = p.player_id
+                    JOIN TeamsPlayers tp ON p.player_id = tp.player_id
+                    WHERE pgs.game_id IN ({placeholders})
+                    AND tp.team_id = %s
+                    AND tp.left_date IS NULL
+                    GROUP BY p.player_id, p.first_name, p.last_name, p.position
+                    ORDER BY avg_points DESC
+                    LIMIT 5
+                ''', game_ids + [team_id])
+                
+                clutch_performers = cursor.fetchall()
+                if clutch_performers:
+                    situational['clutch_performers'] = clutch_performers
 
         response = make_response(jsonify({
             'team_id': team_id,
             'season': season,
+            'games_analyzed': len(recent_games),
             'situational': situational
         }))
         response.status_code = 200

@@ -1,10 +1,4 @@
-"""
-Auth Blueprint
-
-Provides simple user lookup and login endpoints for the demo application.
-This blueprint is intentionally lightweight and modeled after existing admin routes.
-NOTE: This is not production-grade authentication.
-"""
+"""Auth blueprint - demo authentication endpoints."""
 
 from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db

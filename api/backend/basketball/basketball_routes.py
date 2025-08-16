@@ -1,14 +1,4 @@
-"""
-BallWatch Basketball Analytics Platform
-=======================================
-Core Basketball Operations Blueprint
-
-Consolidated routes for Players, Teams, and Games management.
-Serves the core basketball functionality for superfans, coaches, and GMs.
-
-Author: StatPadders Team
-Course: CS 3200 - Summer 2 2025
-"""
+"""Basketball blueprint - players, teams, and games endpoints."""
 
 from flask import Blueprint, request, jsonify, make_response, current_app
 from datetime import datetime, timedelta

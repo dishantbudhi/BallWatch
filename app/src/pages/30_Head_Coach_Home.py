@@ -152,3 +152,5 @@ for i, card in enumerate(cards):
         st.markdown('<div style="height:8px"></div>', unsafe_allow_html=True)
         if st.button(f"Open {card['title']}", key=f"hc_open_{i}"):
             st.switch_page(card['page'])
+
+"""Head Coach landing page with quick access to coaching tools."""

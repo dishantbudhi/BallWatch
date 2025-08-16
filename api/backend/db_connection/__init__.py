@@ -1,9 +1,6 @@
-#------------------------------------------------------------
-# This file creates a shared DB connection resource
-#------------------------------------------------------------
+"""DB connection helper using flask-mysql and dict cursor."""
 from flaskext.mysql import MySQL
 from pymysql import cursors
 
-# the parameter instructs the connection to return data 
-# as a dictionary object. 
+# Return rows as dictionaries
 db = MySQL(cursorclass=cursors.DictCursor)

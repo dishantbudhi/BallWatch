@@ -1,3 +1,5 @@
+"""General Manager home page and tools."""
+
 import logging
 logger = logging.getLogger(__name__)
 

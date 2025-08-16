@@ -12,7 +12,7 @@ SideBarLinks()
 
 api_client.ensure_api_base()
 
-# Debug mode removed
+"""Draft rankings and prospect analysis."""
 
 st.title('Draft Rankings & Player Evaluations — General Manager')
 st.caption('Maintain and update draft evaluations and rankings.')

@@ -1,14 +1,4 @@
-"""
-BallWatch Basketball Analytics Platform
-=======================================
-System Administration Blueprint
-
-System monitoring, data management, error handling, and maintenance
-operations for data engineers and system administrators.
-
-Author: StatPadders Team
-Course: CS 3200 - Summer 2 2025
-"""
+"""Admin blueprint - system administration routes."""
 
 from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db

@@ -1,3 +1,5 @@
+"""Player progress tracking and metrics."""
+
 import os
 import logging
 logger = logging.getLogger(__name__)

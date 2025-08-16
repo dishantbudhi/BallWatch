@@ -17,6 +17,8 @@ SideBarLinks()
 st.title("🆚 Player Comparison — Superfan")
 st.caption("Compare two players side-by-side, view recent games, and visualize trends.")
 
+"""Player Comparison tools and visualizations."""
+
 # ------------------------------------------------------------------------------------
 # Session defaults
 # ------------------------------------------------------------------------------------

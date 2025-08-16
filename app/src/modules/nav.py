@@ -46,50 +46,31 @@ def GeneralManagerNav():
 
 # --------------------------------Links Function -----------------------------------------------
 def SideBarLinks(show_home=False):
-    """
-    This function handles adding links to the sidebar of the app based upon the logged-in user's role, which was put in the streamlit session_state object when logging in.
-    """
+    """Add persona-based links and basic auth handling to the sidebar."""
 
-    # add a logo to the sidebar always
+    # add a logo to the sidebar
     st.sidebar.image("assets/logo.png", width=150)
 
-    # If there is no logged in user, set authenticated flag but DO NOT force a redirect here.
-    # Previously we forced a switch to the Home page which prevented pages from rendering
-    # and making API requests when a session wasn't pre-populated. Leave pages to handle
-    # redirecting if they require authentication.
+    # ensure authenticated flag exists
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
-        # Intentionally do not call st.switch_page("Home.py") here; allow page-level
-        # logic to decide whether to redirect or show a limited unauthenticated view.
 
     if show_home:
-        # Show the Home page link (the landing page) and About link on Home
         HomeNav()
         AboutNav()
 
-    # Show the other page navigators depending on the users' role.
     if st.session_state.get("authenticated"):
-
-        # Combine administrator with data_engineer: show data-engineer links for both roles
         if st.session_state.get("role") in ("administrator", "data_engineer"):
             DataEngineerNav()
-
-        # Persona-specific tabs
         if st.session_state.get("role") == "superfan":
             SuperfanNav()
-
         if st.session_state.get("role") == "head_coach":
             HeadCoachNav()
-
         if st.session_state.get("role") == "general_manager":
             GeneralManagerNav()
 
-    # About page intentionally not shown in sidebar
-
     if st.session_state.get("authenticated"):
-        # Always show a logout button if there is a logged in user
         if st.sidebar.button("Logout"):
-            # use pop to avoid KeyError if keys are missing
             st.session_state.pop("role", None)
             st.session_state.pop("authenticated", None)
             st.session_state.pop("user_id", None)

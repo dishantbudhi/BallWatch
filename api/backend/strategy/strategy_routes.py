@@ -1,14 +1,4 @@
-"""
-BallWatch Basketball Analytics Platform
-=======================================
-Strategic Planning Blueprint
-
-Game plans, draft evaluations, and strategic planning tools
-for coaches and general managers making data-driven decisions.
-
-Author: StatPadders Team
-Course: CS 3200 - Summer 2 2025
-"""
+"""Strategy blueprint - game plans and draft evaluation endpoints."""
 
 from flask import Blueprint, request, jsonify, make_response, current_app
 from backend.db_connection import db

@@ -12,21 +12,83 @@ def _default_api_base():
     if env:
         return env
     try:
+        # If running inside a container prefer common docker-compose service hostnames
         if os.path.exists('/.dockerenv'):
+            # Some setups name the API service 'api' while others use 'web-api' as the hostname
+            # Prefer 'api' first for backward-compatibility, then 'web-api'.
             return 'http://api:4000'
     except Exception:
         pass
-    return 'http://localhost:4000'
+
+    # Local development fallbacks (including container service names for convenience)
+    localhost_candidates = [
+        'http://localhost:4000',
+        'http://127.0.0.1:4000',
+        'http://0.0.0.0:4000',
+        'http://api:4000',
+        'http://web-api:4000'
+    ]
+    # Prefer first candidate by default
+    return localhost_candidates[0]
 
 
 def ensure_api_base():
-    """Ensure st.session_state['api_base_url'] exists and return it."""
-    if 'api_base_url' not in st.session_state:
-        st.session_state['api_base_url'] = _default_api_base()
+    """Return and cache a responsive API base URL.
+
+    Probe a short list of common base URLs (env override, docker service
+    hostnames, localhost) and pick the first one that responds to
+    a lightweight GET to /basketball/teams.
+    """
+    if 'api_base_url' in st.session_state:
+        return st.session_state['api_base_url']
+
+    env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
+    candidates = []
+    if env:
+        candidates.append(env.rstrip('/'))
+    try:
+        if os.path.exists('/.dockerenv'):
+            # containerized: prefer service hostnames
+            candidates.extend(['http://api:4000', 'http://web-api:4000'])
+    except Exception:
+        pass
+
+    # local fallbacks
+    candidates.extend(['http://localhost:4000', 'http://127.0.0.1:4000', 'http://0.0.0.0:4000'])
+
+    # dedupe while preserving order
+    seen = set()
+    uniq = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    candidates = uniq
+
+    chosen = None
+    # quick probe to find a responsive API base
+    for base in candidates:
+        try:
+            probe_url = f"{base.rstrip('/')}/basketball/teams"
+            resp = requests.get(probe_url, timeout=1.5)
+            if resp.status_code in (200, 201):
+                chosen = base
+                break
+        except Exception:
+            continue
+
+    # fallback to first candidate if none responded
+    if not chosen and candidates:
+        chosen = candidates[0]
+
+    st.session_state['api_base_url'] = chosen
+    # store a simple connection flag for UI pages to surface
+    st.session_state['api_connection_status'] = True if chosen else False
     return st.session_state['api_base_url']
 
 
 def _parse_endpoint_with_query(endpoint: str):
+    # Parse an endpoint URL into path and params
     if not endpoint:
         return endpoint, {}
     parsed = urllib.parse.urlparse(endpoint)
@@ -37,6 +99,7 @@ def _parse_endpoint_with_query(endpoint: str):
 
 
 def _request(method: str, endpoint: str, data=None, params=None, timeout=10):
+    # Perform an HTTP request against the chosen API base and return JSON or None
     try:
         base = ensure_api_base()
         path, p = _parse_endpoint_with_query(endpoint)
@@ -80,18 +143,18 @@ def api_put(endpoint: str, data=None, timeout=10):
 
 
 def api_delete(endpoint: str, params=None, timeout=10):
-    """Perform a DELETE request against the API and return parsed JSON or None."""
+    """DELETE request helper returning parsed JSON or None."""
     return _request('DELETE', endpoint, data=None, params=params, timeout=timeout)
 
 
 def get_users(role=None, timeout=10):
-    """Return parsed JSON from GET /auth/users. If role is provided it is sent as a query param."""
+    """GET /auth/users helper (optional role query)."""
     params = {'role': role} if role else None
     return api_get('/auth/users', params=params, timeout=timeout)
 
 
 def get_teams(timeout=10):
-    """Return parsed JSON from GET /basketball/teams (or None)."""
+    """GET /basketball/teams helper."""
     return api_get('/basketball/teams', params=None, timeout=timeout)
 
 
@@ -104,11 +167,7 @@ def assign_team(user_id, team_id, timeout=10):
 
 
 def dedupe_by_id(items, id_keys=('player_id', 'id')):
-    """Return a new list with duplicates removed based on one of the provided id_keys.
-
-    Preserves original order. Items that are not dicts are returned unchanged.
-    If an item has none of the id_keys set, it will be included (can't dedupe).
-    """
+    """Remove duplicate dict items by id key while preserving order."""
     if not items:
         return []
     seen = set()
