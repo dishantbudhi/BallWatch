@@ -18,6 +18,22 @@ api_client.ensure_api_base()
 
 st.title('Contract Efficiency & Free Agency Management')
 
+# Load evaluations automatically (with manual refresh option)
+refresh = st.button('Refresh Free Agent Data')
+if refresh or 'evaluations' not in st.session_state:
+    try:
+        resp = api_client.api_get('/strategy/draft-evaluations')
+        evaluations = []
+        if isinstance(resp, dict) and 'evaluations' in resp:
+            evaluations = resp.get('evaluations') or []
+        elif isinstance(resp, list):
+            evaluations = resp
+        st.session_state['evaluations'] = evaluations
+        if refresh:
+            st.success(f"Loaded {len(evaluations)} player evaluations")
+    except Exception:
+        st.error('Failed to load evaluations from API')
+
 # Salary cap settings
 SALARY_CAP = 136.0
 LUXURY_TAX = 165.0
@@ -409,20 +425,9 @@ if 'evaluations' in st.session_state:
 
 else:
     st.info("Click 'Load Free Agent Data' to begin contract efficiency analysis.")
-    
-    # Show expected data structure
-    st.subheader("Expected Data Structure")
-    st.code("""
-    Contract analysis requires:
-    - Player identification (first_name, last_name, position)
-    - Performance ratings (overall_rating, offensive_rating, defensive_rating)
-    - Potential rating for future value assessment
-    - Market value estimation based on performance
-    """)
 
 # Footer with key insights
-st.markdown("---")
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Available Cap Space: ${available_cap:.1f}M")
+ 
 
 def call_get_raw(endpoint: str, params=None, timeout=10):
     return api_client.api_get(endpoint, params=params, timeout=timeout)

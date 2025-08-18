@@ -12,7 +12,7 @@ SideBarLinks()
 
 api_client.ensure_api_base()
 
-"""Draft rankings and prospect analysis."""
+ 
 
 st.title('Draft Rankings & Player Evaluations — General Manager')
 st.caption('Maintain and update draft evaluations and rankings.')
@@ -96,7 +96,7 @@ if 'evaluations' in st.session_state:
             
             if result:
                 st.success("Evaluation updated successfully!")
-                # Clear cached data to force reload
-                if 'evaluations' in st.session_state:
-                    del st.session_state['evaluations']
-                st.rerun()
+                # Refresh in place without full rerun to avoid UI glitching
+                updated = make_request("/strategy/draft-evaluations")
+                if updated and 'evaluations' in updated:
+                    st.session_state['evaluations'] = updated['evaluations']

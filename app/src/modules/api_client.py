@@ -1,132 +1,97 @@
 import os
 import logging
-import urllib.parse
 import requests
-import streamlit as st
+from urllib.parse import urljoin, parse_qs
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
+# Module-level API base and session
+API_BASE = None
+_session = None
+
 
 def _default_api_base():
+    """Resolve API base from environment with sensible fallbacks.
+    Prioritize Docker service discovery when running in a container.
+    """
     env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
     if env:
-        return env
-    try:
-        # If running inside a container prefer common docker-compose service hostnames
-        if os.path.exists('/.dockerenv'):
-            # Some setups name the API service 'api' while others use 'web-api' as the hostname
-            # Prefer 'api' first for backward-compatibility, then 'web-api'.
-            return 'http://api:4000'
-    except Exception:
-        pass
+        logger.debug('Using API base from env: %s', env)
+        return env.rstrip('/')
 
-    # Local development fallbacks (including container service names for convenience)
-    localhost_candidates = [
-        'http://localhost:4000',
-        'http://127.0.0.1:4000',
-        'http://0.0.0.0:4000',
-        'http://api:4000',
-        'http://web-api:4000'
-    ]
-    # Prefer first candidate by default
-    return localhost_candidates[0]
+    # Detect Docker container context
+    is_docker = os.path.exists('/.dockerenv') or bool(os.getenv('DOCKER_CONTAINER'))
+    if is_docker:
+        # In Compose, the API service is named 'web-api'
+        return 'http://web-api:4000'
+
+    # Local development default
+    return 'http://localhost:4000'
+
+
+def _ensure_session():
+    """Create a requests Session with a retry strategy for idempotent calls."""
+    global _session
+    if _session is not None:
+        return _session
+
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=0.5, status_forcelist=(500, 502, 503, 504))
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    _session = session
+    return _session
 
 
 def ensure_api_base():
-    """Return and cache a responsive API base URL.
-
-    Probe a short list of common base URLs (env override, docker service
-    hostnames, localhost) and pick the first one that responds to
-    a lightweight GET to /basketball/teams.
-    """
-    if 'api_base_url' in st.session_state:
-        return st.session_state['api_base_url']
-
-    env = os.getenv('API_BASE_URL') or os.getenv('API_BASE')
-    candidates = []
-    if env:
-        candidates.append(env.rstrip('/'))
-    try:
-        if os.path.exists('/.dockerenv'):
-            # containerized: prefer service hostnames
-            candidates.extend(['http://api:4000', 'http://web-api:4000'])
-    except Exception:
-        pass
-
-    # local fallbacks
-    candidates.extend(['http://localhost:4000', 'http://127.0.0.1:4000', 'http://0.0.0.0:4000'])
-
-    # dedupe while preserving order
-    seen = set()
-    uniq = []
-    for c in candidates:
-        if c not in seen:
-            seen.add(c)
-            uniq.append(c)
-    candidates = uniq
-
-    chosen = None
-    # quick probe to find a responsive API base
-    for base in candidates:
-        try:
-            probe_url = f"{base.rstrip('/')}/basketball/teams"
-            resp = requests.get(probe_url, timeout=1.5)
-            if resp.status_code in (200, 201):
-                chosen = base
-                break
-        except Exception:
-            continue
-
-    # fallback to first candidate if none responded
-    if not chosen and candidates:
-        chosen = candidates[0]
-
-    st.session_state['api_base_url'] = chosen
-    # store a simple connection flag for UI pages to surface
-    st.session_state['api_connection_status'] = True if chosen else False
-    return st.session_state['api_base_url']
+    """Ensure API_BASE is initialized and return it."""
+    global API_BASE
+    if API_BASE:
+        return API_BASE
+    API_BASE = _default_api_base()
+    logger.info('API_BASE resolved to %s', API_BASE)
+    return API_BASE
 
 
 def _parse_endpoint_with_query(endpoint: str):
-    # Parse an endpoint URL into path and params
+    """Return (path, params_dict) given endpoint which may include querystring."""
     if not endpoint:
-        return endpoint, {}
-    parsed = urllib.parse.urlparse(endpoint)
-    path = parsed.path
-    qs = urllib.parse.parse_qs(parsed.query)
-    params = {k: v[0] for k, v in qs.items()}
-    return path, params
+        return ('', {})
+    if '?' not in endpoint:
+        return (endpoint, {})
+    path, qs = endpoint.split('?', 1)
+    params = {k: v[0] if isinstance(v, list) else v for k, v in parse_qs(qs).items()}
+    return (path, params)
 
 
 def _request(method: str, endpoint: str, data=None, params=None, timeout=10):
-    # Perform an HTTP request against the chosen API base and return JSON or None
+    """Generic request helper that joins the API base and handles errors.
+    Returns JSON dict or None on failure.
+    """
+    base = ensure_api_base()
+    path, implicit_params = _parse_endpoint_with_query(endpoint)
+    url = urljoin(base + '/', path.lstrip('/'))
+    merged_params = {}
+    if implicit_params:
+        merged_params.update(implicit_params)
+    if params:
+        merged_params.update(params)
+
+    session = _ensure_session()
     try:
-        base = ensure_api_base()
-        path, p = _parse_endpoint_with_query(endpoint)
-        merged = {**(p or {}), **(params or {})}
-        full = f"{base}{path}"
-        resp = requests.request(method, full, json=data if method in ('POST','PUT','PATCH') else None, params=merged or None, timeout=timeout)
-        if resp.status_code in (200, 201):
-            try:
-                return resp.json()
-            except Exception:
-                logger.warning('Non-JSON response from %s', full)
-                return None
-        logger.warning('%s %s returned %s', method, full, resp.status_code)
-        if st.session_state.get('debug_mode', False):
-            try:
-                st.error(f"{method} {full} returned {resp.status_code}: {resp.text}")
-            except Exception:
-                pass
-    except requests.exceptions.ConnectionError:
-        logger.error('Connection error for %s %s', method, endpoint)
-        if st.session_state.get('debug_mode', False):
-            try:
-                st.error(f"Connection error: {method} {endpoint} against {st.session_state.get('api_base_url')}")
-            except Exception:
-                pass
+        resp = session.request(method, url, json=data, params=merged_params or None, timeout=timeout)
+        resp.raise_for_status()
+        # Defensive: some endpoints return empty body
+        if resp.text:
+            return resp.json()
+        return {}
+    except requests.HTTPError as he:
+        logger.warning('HTTP %s %s failed: %s - %s', method, url, resp.status_code if 'resp' in locals() else '', str(he))
     except Exception as e:
-        logger.exception('Error requesting %s %s: %s', method, endpoint, e)
+        logger.exception('Request error %s %s: %s', method, url, e)
     return None
 
 
@@ -143,70 +108,67 @@ def api_put(endpoint: str, data=None, timeout=10):
 
 
 def api_delete(endpoint: str, params=None, timeout=10):
-    """DELETE request helper returning parsed JSON or None."""
     return _request('DELETE', endpoint, data=None, params=params, timeout=timeout)
 
 
+# Convenience methods used by pages
 def get_users(role=None, timeout=10):
-    """GET /auth/users helper (optional role query)."""
     params = {'role': role} if role else None
     return api_get('/auth/users', params=params, timeout=timeout)
 
 
 def get_teams(timeout=10):
-    """GET /basketball/teams helper."""
-    return api_get('/basketball/teams', params=None, timeout=timeout)
+    return api_get('/basketball/teams', timeout=timeout)
 
 
 def assign_team(user_id, team_id, timeout=10):
-    """Call PUT /auth/users/{user_id}/assign-team with JSON payload {team_id}.
-
-    Returns parsed JSON body on success or None.
-    """
     return api_put(f'/auth/users/{user_id}/assign-team', data={'team_id': team_id}, timeout=timeout)
 
 
 def dedupe_by_id(items, id_keys=('player_id', 'id')):
-    """Remove duplicate dict items by id key while preserving order."""
-    if not items:
-        return []
     seen = set()
     out = []
-    for it in items:
+    for it in items or []:
         if not isinstance(it, dict):
-            out.append(it)
             continue
-        pid = None
+        _id = None
         for k in id_keys:
-            if k in it and it.get(k) is not None:
-                pid = it.get(k)
+            if k in it:
+                _id = it.get(k)
                 break
-        if pid is None:
+        if _id is None:
             out.append(it)
             continue
-        try:
-            key = int(pid)
-        except Exception:
-            key = str(pid)
-        if key in seen:
+        if _id in seen:
             continue
-        seen.add(key)
+        seen.add(_id)
         out.append(it)
     return out
 
 
 def get_players(params=None, timeout=10):
-    """Fetch players from the API and return a deduplicated list.
-
-    This is a convenience wrapper that normalizes the various response shapes
-    (list or dict with 'players') and removes duplicates by player_id or id.
+    """Return a list of player dicts, deduplicated by player_id.
+    Normalizes backend responses that may wrap results under 'players'.
     """
-    data = api_get('/basketball/players', params=params, timeout=timeout)
-    if isinstance(data, dict) and 'players' in data:
-        players = data.get('players', []) or []
-    elif isinstance(data, list):
-        players = data or []
+    resp = api_get('/basketball/players', params=params, timeout=timeout)
+    rows = []
+    if isinstance(resp, dict) and 'players' in resp:
+        rows = resp.get('players') or []
+    elif isinstance(resp, list):
+        rows = resp
     else:
-        players = []
+        rows = []
 
-    return dedupe_by_id(players, id_keys=('player_id', 'id'))
+    # Deduplicate by player id-like keys
+    seen = set()
+    out = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        pid = r.get('player_id') or r.get('id')
+        key = pid if pid is not None else id(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out

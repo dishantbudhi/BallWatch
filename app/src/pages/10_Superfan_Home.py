@@ -4,13 +4,10 @@ logger = logging.getLogger(__name__)
 import streamlit as st
 from modules.nav import SideBarLinks
 
-"""Superfan persona home page: quick access to fan features."""
-
 st.set_page_config(layout='wide')
 SideBarLinks()
 
 st.title(f"Welcome Superfan, {st.session_state.get('first_name', 'Guest')}.")
-st.write('')
 st.write('')
 st.write('### What would you like to do today?')
 

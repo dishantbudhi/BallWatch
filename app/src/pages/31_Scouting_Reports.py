@@ -124,85 +124,115 @@ with tab1:
             focal_team = None
             st.warning('Team context not set. Please set your team on the Head Coach Home page to enable scouting.')
 
-        # Only allow selecting an opponent if a focal team is available
+        # Allow selecting both your team and an opponent when no team context exists
         if focal_team:
-            opponent_options = [n for n in team_names if n != focal_team]
-            if opponent_options:
-                opponent = st.selectbox('Opponent to scout', opponent_options)
+            your_team = focal_team
+            opponent_options = [n for n in team_names if n != your_team]
+            opponent = st.selectbox('Opponent to scout', opponent_options) if opponent_options else None
+        else:
+            csel1, csel2 = st.columns(2)
+            with csel1:
+                your_team = st.selectbox('Your Team', team_names) if team_names else None
+            with csel2:
+                opp_opts = [n for n in team_names if n and n != your_team]
+                opponent = st.selectbox('Opponent', opp_opts) if opp_opts else None
+
+        if st.button('Get Scouting Report'):
+            if not your_team or not opponent:
+                st.error('Please select both your team and an opponent.')
             else:
-                opponent = None
-
-            if st.button('Get Scouting Report'):
-                if not focal_team or not opponent:
-                    st.error('Please ensure your team context is set and an opponent is selected.')
+                your_id = team_map.get(your_team)
+                opp_id = team_map.get(opponent)
+                if your_id is None or opp_id is None:
+                    st.error('Failed to resolve team ids')
                 else:
-                    your_id = team_map.get(focal_team)
-                    opp_id = team_map.get(opponent)
-                    if your_id is None or opp_id is None:
-                        st.error('Failed to resolve team ids')
-                    else:
-                        report = make_request(f'/analytics/opponent-reports?team_id={your_id}&opponent_id={opp_id}') or {}
+                    report = make_request(f'/analytics/opponent-reports?team_id={your_id}&opponent_id={opp_id}') or {}
 
-                        if report:
-                            st.subheader(f"Scouting Report — {opponent}")
+                    if report:
+                        st.subheader(f"Scouting Report — {opponent}")
 
-                            perf = report.get('recent_performance') or {}
-                            avg_scored = perf.get('avg_points_scored', 0)
-                            avg_allowed = perf.get('avg_points_allowed', 0)
+                        perf = report.get('recent_performance') or {}
+                        avg_scored = perf.get('avg_points_scored', 0)
+                        avg_allowed = perf.get('avg_points_allowed', 0)
 
-                            c1, c2 = st.columns(2)
-                            c1.metric('Avg. Points Scored', f"{float(avg_scored):.1f}")
-                            c2.metric('Avg. Points Allowed', f"{float(avg_allowed):.1f}")
+                        c1, c2 = st.columns(2)
+                        c1.metric('Avg. Points Scored', f"{float(avg_scored):.1f}")
+                        c2.metric('Avg. Points Allowed', f"{float(avg_allowed):.1f}")
 
-                            # Key players
-                            if report.get('key_players'):
-                                st.subheader('Key Players')
-                                players_df = pd.DataFrame(report['key_players'])
-                                cols = st.columns(min(len(players_df), 4))
-                                for i, p in players_df.iterrows():
-                                    with cols[i % len(cols)]:
-                                        st.info(f"**{p['first_name']} {p['last_name']}** ({p.get('position','')})")
-                                        try:
-                                            st.metric('PPG', f"{float(p.get('avg_points',0)):.1f}")
-                                        except Exception:
-                                            pass
+                        # Key players
+                        if report.get('key_players'):
+                            st.subheader('Key Players')
+                            players_df = pd.DataFrame(report['key_players'])
+                            cols = st.columns(min(len(players_df), 4))
+                            for i, p in players_df.iterrows():
+                                with cols[i % len(cols)]:
+                                    st.info(f"**{p['first_name']} {p['last_name']}** ({p.get('position','')})")
+                                    try:
+                                        st.metric('PPG', f"{float(p.get('avg_points',0)):.1f}")
+                                    except Exception:
+                                        pass
 
-                            # Tactical Snapshot
-                            shooting = report.get('shooting_patterns')
-                            weaknesses = report.get('defensive_weaknesses')
-                            recs = report.get('tactical_recommendations') or []
+                        # Tactical Snapshot
+                        shooting = report.get('shooting_patterns')
+                        weaknesses = report.get('defensive_weaknesses')
+                        recs = report.get('tactical_recommendations') or []
+                        # Remove generic placeholder text if present
+                        recs = [r for r in recs if 'Insufficient granular shooting data' not in str(r)]
 
-                            if shooting or weaknesses or recs:
-                                st.subheader('Tactical Snapshot')
-                                sc1, sc2, sc3 = st.columns([1,1,2])
-                                with sc1:
-                                    if shooting:
-                                        st.metric('FG %', f"{shooting.get('fg_pct',0)*100:.1f}%")
-                                        st.metric('3P %', f"{shooting.get('three_pt_pct',0)*100:.1f}%")
+                        if shooting or weaknesses or recs:
+                            st.subheader('Tactical Snapshot')
+                            sc1, sc2, sc3 = st.columns([1,1,2])
+                            with sc1:
+                                if shooting:
+                                    st.metric('FG %', f"{float(shooting.get('fg_pct',0))*100:.1f}%")
+                                    st.metric('3P %', f"{float(shooting.get('three_pt_pct',0))*100:.1f}%")
+                                else:
+                                    # derive simple shooting snapshot from recent performance if detailed stats not present
+                                    games = report.get('recent_performance', {}).get('games') or []
+                                    if games:
+                                        avg_for = sum(g.get('opponent_score',0) for g in games)/len(games)
+                                        avg_against = sum(g.get('other_team_score',0) for g in games)/len(games)
+                                        st.metric('Avg For', f"{avg_for:.1f}")
+                                        st.metric('Avg Against', f"{avg_against:.1f}")
                                     else:
-                                        st.write('Shooting patterns: N/A')
-                                with sc2:
-                                    if shooting:
-                                        st.metric('2P %', f"{shooting.get('two_pt_pct',0)*100:.1f}%")
-                                        st.metric('FT %', f"{shooting.get('ft_pct',0)*100:.1f}%")
-                                with sc3:
-                                    if weaknesses:
-                                        st.markdown('**Defensive Weaknesses**')
-                                        for w in weaknesses:
-                                            st.warning(w)
+                                        st.write('Shooting patterns unavailable')
+                            with sc2:
+                                if shooting:
+                                    st.metric('2P %', f"{shooting.get('two_pt_pct',0)*100:.1f}%")
+                                    st.metric('FT %', f"{shooting.get('ft_pct',0)*100:.1f}%")
+                            with sc3:
+                                if weaknesses:
+                                    st.markdown('**Defensive Weaknesses**')
+                                    for w in weaknesses:
+                                        st.warning(w)
+                                else:
+                                    # heuristics: if avg allowed is high, flag paint/perimeter generically
+                                    games = report.get('recent_performance', {}).get('games') or []
+                                    if games:
+                                        avg_against = sum(g.get('other_team_score',0) for g in games)/len(games)
+                                        if avg_against > 112:
+                                            st.warning('Allows high points per game — tighten transition and closeouts.')
+                                        else:
+                                            st.info('Defense generally solid across recent games.')
                                     else:
-                                        st.write('No clear defensive weaknesses from available data.')
+                                        st.info('Defense generally solid across recent games.')
 
-                                if recs:
-                                    st.markdown('**Top Tactical Recommendations**')
-                                    for r in recs:
-                                        st.success(r)
-                                        
-                                # REMOVED: "Mark recommendations for practice" button and functionality
-                                # This feature has been removed as requested
+                            if recs:
+                                st.markdown('**Top Tactical Recommendations**')
+                                for r in recs:
+                                    st.success(r)
+                            else:
+                                # Provide simple heuristics as fallback recommendations
+                                perf_games = report.get('recent_performance', {}).get('games') or []
+                                if perf_games:
+                                    avg_for = sum(g.get('opponent_score',0) for g in perf_games)/len(perf_games)
+                                    avg_against = sum(g.get('other_team_score',0) for g in perf_games)/len(perf_games)
+                                    if avg_against > avg_for:
+                                        st.warning('Slow the pace and prioritize half-court defense; limit early offense by opponent.')
+                                    else:
+                                        st.success('Push tempo against second units; exploit transition before defense is set.')
 
-                        with st.expander('View Raw Report'):
-                            st.json(report)
+                    # Remove raw report view per request
 
 with tab2:
     st.header('Game Planner (Create & Manage)')
@@ -226,9 +256,15 @@ with tab2:
             gp_team = None
             st.warning('Team context not set. Please set your team on the Head Coach Home page to create game plans.')
 
-        # Only render game planner inputs if team context exists
-        if gp_team:
-            # Opponent must be selected for game plans (no '(none)' option)
+        # Render planner inputs; if no session team, allow selecting it here
+        if not gp_team:
+            gpc1, gpc2 = st.columns(2)
+            with gpc1:
+                gp_team = st.selectbox('Select Your Team', team_names)
+            with gpc2:
+                gp_opp_options = [n for n in team_names if n and n != gp_team]
+                gp_opp = st.selectbox('Select Opponent', gp_opp_options)
+        else:
             gp_opp_options = [n for n in team_names if n != gp_team]
             gp_opp = st.selectbox('Select Opponent', gp_opp_options)
 
@@ -289,3 +325,4 @@ with tab2:
                                     upd = make_request(f"/strategy/game-plans/{gp.get('plan_id')}", method='PUT', data=gp_payload)
                                     if upd:
                                         st.success('Plan activated')
+                                        st.rerun()

@@ -50,6 +50,7 @@ st.set_page_config(layout='wide')
 SideBarLinks()
 
 st.title(f"Welcome Head Coach, {st.session_state.get('first_name', 'Guest')}.")
+st.write('')
 
 # If this user is a head coach, fetch their user row and show the assigned team (if any)
 try:
@@ -153,4 +154,4 @@ for i, card in enumerate(cards):
         if st.button(f"Open {card['title']}", key=f"hc_open_{i}"):
             st.switch_page(card['page'])
 
-"""Head Coach landing page with quick access to coaching tools."""
+

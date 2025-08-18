@@ -161,7 +161,7 @@ def get_data_loads():
         cursor = db.get_db().cursor()
 
         # Be permissive when identifying data_load rows: either explicit log_type or service/message patterns
-        query = '''
+        query = f'''
             SELECT
                 log_id as load_id,
                 service_name as load_type,
@@ -183,11 +183,11 @@ def get_data_loads():
                 (SELECT username FROM Users WHERE user_id = SystemLogs.user_id) as initiated_by,
                 TIMESTAMPDIFF(SECOND, created_at, IFNULL(resolved_at, NOW())) as duration_seconds
             FROM SystemLogs
-            WHERE (log_type = 'data_load' OR LOWER(service_name) LIKE '%data%' OR LOWER(service_name) LIKE '%feed%' OR LOWER(message) LIKE '%load%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE (log_type = 'data_load' OR LOWER(service_name) LIKE '%%data%%' OR LOWER(service_name) LIKE '%%feed%%' OR LOWER(message) LIKE '%%load%%')
+              AND created_at >= DATE_SUB(NOW(), INTERVAL {days} DAY)
         '''
 
-        params = [days]
+        params = []
 
         if status:
             # Accept frontend status and filter against our computed status or legacy severity values
@@ -216,7 +216,7 @@ def get_data_loads():
             row['load_type'] = row.get('load_type')
 
         # Get status summary (tolerant of legacy severity values)
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT
                 CASE
                     WHEN (severity IN ('info','low') AND resolved_at IS NOT NULL) OR (severity IN ('warning','medium') AND resolved_at IS NOT NULL) THEN 'completed'
@@ -226,8 +226,8 @@ def get_data_loads():
                 END as status,
                 COUNT(*) as count
             FROM SystemLogs
-            WHERE (log_type = 'data_load' OR LOWER(service_name) LIKE '%data%' OR LOWER(message) LIKE '%load%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE (log_type = 'data_load' OR LOWER(service_name) LIKE '%%data%%' OR LOWER(message) LIKE '%%load%%')
+              AND created_at >= DATE_SUB(NOW(), INTERVAL {days} DAY)
             GROUP BY
                 CASE
                     WHEN (severity IN ('info','low') AND resolved_at IS NOT NULL) OR (severity IN ('warning','medium') AND resolved_at IS NOT NULL) THEN 'completed'
@@ -235,7 +235,7 @@ def get_data_loads():
                     WHEN (severity IN ('warning','medium') AND resolved_at IS NULL) THEN 'running'
                     ELSE 'pending'
                 END
-        ''', (days,))
+        ''')
 
         status_summary = cursor.fetchall()
 
@@ -413,7 +413,7 @@ def get_error_logs():
         cursor = db.get_db().cursor()
 
         # Be permissive: sample data sometimes stores severity-like values in log_type
-        query = '''
+        query = f'''
             SELECT
                 log_id,
                 log_id as data_error_id,
@@ -428,15 +428,16 @@ def get_error_logs():
                 user_id as record_id
             FROM SystemLogs
             WHERE (log_type IN ('error','validation') OR severity IS NOT NULL)
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND created_at >= DATE_SUB(NOW(), INTERVAL {days} DAY)
         '''
 
-        params = [days]
+        params = []
 
         if severity:
             # accept either canonical or legacy values
-            params.append(severity)
             query += ' AND (severity = %s OR LOWER(severity) = %s)'
+            params.append(severity)
+            params.append(severity.lower())
         if service_name:
             query += ' AND service_name = %s'
             params.append(service_name)
@@ -456,29 +457,26 @@ def get_error_logs():
             raw = r.get('severity') or r.get('log_type')
             r['severity'] = _normalize_severity(raw)
 
-        # Get error summary by severity - tolerant grouping
-        cursor.execute('''
-            SELECT
-                CASE
-                    WHEN severity IN ('critical','high') THEN 'critical'
-                    WHEN severity IN ('error','medium') THEN 'error'
-                    WHEN severity IN ('warning') THEN 'warning'
-                    ELSE 'info'
-                END as severity,
-                COUNT(*) as count,
-                SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) as resolved_count
-            FROM SystemLogs
-            WHERE (log_type IN ('error','validation') OR severity IS NOT NULL)
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
-            GROUP BY 1
-            ORDER BY
-                CASE severity
-                    WHEN 'critical' THEN 1
-                    WHEN 'error' THEN 2
-                    WHEN 'warning' THEN 3
-                    WHEN 'info' THEN 4
-                END
-        ''', (days,))
+        # Get error summary by severity - tolerant grouping (avoid ONLY_FULL_GROUP_BY) using subquery
+        cursor.execute(f'''
+            SELECT sev_bucket as severity,
+                   COUNT(*) as count,
+                   SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) as resolved_count
+            FROM (
+                SELECT CASE
+                           WHEN severity IN ('critical','high') THEN 'critical'
+                           WHEN severity IN ('error','medium') THEN 'error'
+                           WHEN severity IN ('warning') THEN 'warning'
+                           ELSE 'info'
+                       END as sev_bucket,
+                       resolved_at
+                FROM SystemLogs
+                WHERE (log_type IN ('error','validation') OR severity IS NOT NULL)
+                  AND created_at >= DATE_SUB(NOW(), INTERVAL {days} DAY)
+            ) t
+            GROUP BY sev_bucket
+            ORDER BY FIELD(sev_bucket, 'critical','error','warning','info')
+        ''')
 
         severity_summary = cursor.fetchall()
 
@@ -494,6 +492,59 @@ def get_error_logs():
     except Exception as e:
         current_app.logger.error(f'Error fetching error logs: {e}')
         return make_response(jsonify({"error": "Failed to fetch error logs"}), 500)
+
+
+# ----------------------------------------------------------------------------
+# PUT /error-logs/<log_id>: mark a specific log as resolved (or update fields)
+@admin.route('/error-logs/<int:log_id>', methods=['PUT'])
+def resolve_error_log(log_id):
+    """
+    Update a specific error/validation log entry to mark it as resolved and/or
+    update resolution metadata.
+
+    Expected JSON body (all optional):
+      - resolved_by: username or user id
+      - resolution_notes: free text
+      - message: optional new message
+    """
+    try:
+        payload = request.get_json() or {}
+        cursor = db.get_db().cursor()
+
+        # Verify log exists in the error/validation space
+        cursor.execute('''
+            SELECT log_id FROM SystemLogs 
+            WHERE log_id = %s AND (log_type IN ('error','validation') OR severity IS NOT NULL)
+        ''', (log_id,))
+        if not cursor.fetchone():
+            return make_response(jsonify({"error": "Error log not found"}), 404)
+
+        update_fields = ["resolved_at = NOW()"]
+        values = []
+        if 'resolved_by' in payload:
+            update_fields.append('resolved_by = %s')
+            values.append(payload['resolved_by'])
+        if 'resolution_notes' in payload:
+            update_fields.append('resolution_notes = %s')
+            values.append(payload['resolution_notes'])
+        if 'message' in payload:
+            update_fields.append('message = %s')
+            values.append(payload['message'])
+
+        query = f"UPDATE SystemLogs SET {', '.join(update_fields)} WHERE log_id = %s"
+        values.append(log_id)
+        cursor.execute(query, values)
+        db.get_db().commit()
+
+        return make_response(jsonify({
+            'message': 'Log marked as resolved',
+            'log_id': log_id
+        }), 200)
+
+    except Exception as e:
+        current_app.logger.error(f'Error resolving error log: {e}')
+        db.get_db().rollback()
+        return make_response(jsonify({"error": "Failed to resolve error log"}), 500)
 
 
 # ============================================================================
@@ -514,7 +565,7 @@ def get_data_errors():
 
         cursor = db.get_db().cursor()
 
-        query = '''
+        query = f'''
             SELECT
                 log_id as data_error_id,
                 service_name as table_name,
@@ -528,11 +579,11 @@ def get_data_errors():
                 resolution_notes,
                 user_id
             FROM SystemLogs
-            WHERE (log_type = 'validation' OR log_type = 'error' OR LOWER(service_name) LIKE '%data%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+            WHERE (log_type = 'validation' OR log_type = 'error' OR LOWER(service_name) LIKE '%%data%%')
+              AND created_at >= DATE_SUB(NOW(), INTERVAL {days} DAY)
         '''
 
-        params = [days]
+        params = []
 
         if service_name:
             query += ' AND service_name = %s'
@@ -552,7 +603,7 @@ def get_data_errors():
             r['severity'] = _normalize_severity(r.get('severity'))
 
         # Update error summary to show by service and severity
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT
                 service_name as component,
                 CASE
@@ -565,10 +616,10 @@ def get_data_errors():
                 SUM(CASE WHEN resolved_at IS NOT NULL THEN 1 ELSE 0 END) as resolved_count
             FROM SystemLogs
             WHERE (log_type = 'validation' OR log_type = 'error' OR LOWER(service_name) LIKE '%data%')
-              AND created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+              AND created_at >= DATE_SUB(NOW(), INTERVAL {days} DAY)
             GROUP BY service_name, severity
             ORDER BY count DESC
-        ''', (days,))
+        ''')
 
         error_summary = cursor.fetchall()
 
@@ -584,4 +635,181 @@ def get_data_errors():
     except Exception as e:
         current_app.logger.error(f'Error fetching data errors: {e}')
         return make_response(jsonify({"error": "Failed to fetch data errors"}), 500)
+
+
+# ============================================================================
+# DATA CLEANUP SCHEDULER (lightweight via SystemLogs)
+# ============================================================================
+
+@admin.route('/data-cleanup', methods=['GET'])
+def get_data_cleanup_schedule():
+    """
+    Return active cleanup schedules and recent cleanup history.
+
+    Uses SystemLogs as a lightweight store:
+      - Schedules: rows with log_type='cleanup_schedule'
+      - History: rows with log_type='cleanup_run'
+    """
+    try:
+        cursor = db.get_db().cursor()
+
+        # Active schedules
+        cursor.execute('''
+            SELECT 
+                log_id as schedule_id,
+                service_name as cleanup_type,
+                message as frequency,
+                records_processed as retention_days,
+                created_at as created_at,
+                resolved_at as last_run,
+                user_id as created_by
+            FROM SystemLogs
+            WHERE log_type = 'cleanup_schedule'
+            ORDER BY created_at DESC
+        ''')
+        schedules = cursor.fetchall() or []
+
+        # Recent cleanup runs (history)
+        cursor.execute('''
+            SELECT 
+                log_id as run_id,
+                service_name as cleanup_type,
+                message as notes,
+                created_at as started_at,
+                resolved_at as finished_at,
+                records_processed as items_deleted,
+                records_failed as items_failed
+            FROM SystemLogs
+            WHERE log_type = 'cleanup_run'
+            ORDER BY created_at DESC
+            LIMIT 50
+        ''')
+        history = cursor.fetchall() or []
+
+        return make_response(jsonify({
+            'active_schedules': schedules,
+            'recent_cleanup_history': history
+        }), 200)
+
+    except Exception as e:
+        current_app.logger.error(f'Error fetching cleanup schedule: {e}')
+        return make_response(jsonify({"error": "Failed to fetch cleanup schedule"}), 500)
+
+
+@admin.route('/data-cleanup', methods=['POST'])
+def schedule_data_cleanup():
+    """
+    Create a new cleanup schedule entry.
+
+    Expected JSON body:
+      {
+        "cleanup_type": str,
+        "frequency": str,             # e.g., daily/weekly/monthly
+        "retention_days": int,
+        "next_run": ISO8601 datetime,
+        "created_by": str (username)
+      }
+    """
+    try:
+        payload = request.get_json() or {}
+        required = ['cleanup_type', 'frequency', 'retention_days', 'created_by']
+        for f in required:
+            if f not in payload:
+                return make_response(jsonify({'error': f'Missing required field: {f}'}), 400)
+
+        cursor = db.get_db().cursor()
+
+        # Persist schedule in SystemLogs as a 'cleanup_schedule'
+        cursor.execute('''
+            INSERT INTO SystemLogs (
+                log_type, service_name, severity, message, records_processed, resolved_at, user_id
+            ) VALUES (
+                'cleanup_schedule', %s, 'info', %s, %s,
+                %s,
+                (SELECT user_id FROM Users WHERE username = %s LIMIT 1)
+            )
+        ''', (
+            payload['cleanup_type'],
+            payload.get('frequency'),
+            int(payload.get('retention_days') or 0),
+            payload.get('next_run'),
+            payload.get('created_by')
+        ))
+
+        db.get_db().commit()
+
+        return make_response(jsonify({
+            'message': 'Cleanup scheduled',
+            'schedule_id': cursor.lastrowid
+        }), 201)
+
+    except Exception as e:
+        current_app.logger.error(f'Error scheduling cleanup: {e}')
+        db.get_db().rollback()
+        return make_response(jsonify({"error": "Failed to schedule cleanup"}), 500)
+
+# ----------------------------------------------------------------------------
+# DELETE /error-logs: bulk cleanup based on filters [Mike-2.6]
+@admin.route('/error-logs', methods=['DELETE'])
+def delete_error_logs():
+    """
+    Delete error/validation logs filtered by severity/service_name/older_than_days.
+
+    Query params (optional):
+      - severity: critical|error|warning|info (accepts legacy high/medium/low)
+      - service_name: exact match on SystemLogs.service_name
+      - older_than_days: delete logs older than N days (default 7)
+    """
+    try:
+        current_app.logger.info('DELETE /system/error-logs - Bulk deleting logs')
+
+        severity = request.args.get('severity')
+        service_name = request.args.get('service_name')
+        older_than_days = request.args.get('older_than_days', 7, type=int)
+
+        cursor = db.get_db().cursor()
+
+        # Base condition: only delete error/validation like rows
+        query = '''
+            DELETE FROM SystemLogs
+            WHERE (log_type IN ('error','validation') OR severity IS NOT NULL)
+              AND created_at < DATE_SUB(NOW(), INTERVAL %s DAY)
+        '''
+        params = [older_than_days]
+
+        if severity:
+            sev = _normalize_severity(severity)
+            # Match both canonical and legacy forms
+            query += ' AND (LOWER(severity) = %s OR LOWER(severity) = %s)'
+            if sev == 'critical':
+                params.extend(['critical', 'high'])
+            elif sev == 'error':
+                params.extend(['error', 'medium'])
+            elif sev == 'warning':
+                params.extend(['warning', 'warning'])
+            else:
+                params.extend(['info', 'low'])
+
+        if service_name:
+            query += ' AND service_name = %s'
+            params.append(service_name)
+
+        cursor.execute(query, params)
+        deleted = cursor.rowcount
+        db.get_db().commit()
+
+        return make_response(jsonify({
+            'message': 'Logs deleted',
+            'deleted_count': deleted,
+            'filters': {
+                'severity': severity,
+                'service_name': service_name,
+                'older_than_days': older_than_days
+            }
+        }), 200)
+
+    except Exception as e:
+        current_app.logger.error(f'Error deleting error logs: {e}')
+        db.get_db().rollback()
+        return make_response(jsonify({"error": "Failed to delete error logs"}), 500)
 

@@ -18,6 +18,7 @@ SideBarLinks()
 
 st.title("Data Pipelines — Data Engineer")
 st.caption("Monitor, manage, and troubleshoot data loads for the analytics platform.")
+st.write("")
 
 # API base URL (supports env override)
 if 'api_base_url' not in st.session_state:
@@ -124,8 +125,7 @@ def call_put_raw(endpoint: str, data=None, timeout=10):
 # Debug mode UI removed from this page
 
 # Main Page
-st.header("Data Pipelines Management")
-st.markdown("Monitor and manage data loads for BallWatch analytics platform")
+st.markdown("")
 
 # System Health Check
 st.subheader("System Health")
@@ -362,7 +362,7 @@ if loads and len(loads) > 0:
                             if st.button(f"Mark Resolved", key=f"resolve_{load['load_id']}"):
                                 result = api_put(f"/system/data-loads/{load['load_id']}", {
                                     'status': 'completed',
-                                    'resolved_by': 'mlewis',
+                                    'resolved_by': st.session_state.get('username', 'system'),
                                     'resolution_notes': 'Manually marked as resolved'
                                 })
                                 if result:
@@ -374,58 +374,14 @@ if loads and len(loads) > 0:
                                 result = api_post('/system/data-loads', {
                                     'load_type': load['load_type'],
                                     'source_file': load.get('source_file'),
-                                    'initiated_by': 'mlewis'
+                                    'initiated_by': st.session_state.get('username', 'system')
                                 })
                                 if result:
                                     st.success(f"New load started: ID {result.get('load_id')}")
                                     st.rerun()
     else:
-        # No loads returned from API for the given filters — show a helpful message and sample data for debugging
         st.info("No data loads found for the selected criteria.")
-        if st.session_state.get('debug_mode', False):
-            st.info('Debug mode enabled — showing sample data for Data Pipelines')
-        # Provide mock/sample loads so the UI remains useful in dev/test environments
-        sample_loads = [
-            {
-                'load_id': 101,
-                'load_type': 'NBA API',
-                'status': 'completed',
-                'started_at': '2025-08-14 02:10',
-                'completed_at': '2025-08-14 02:12',
-                'duration_seconds': 120,
-                'records_processed': 12456,
-                'records_failed': 0,
-                'initiated_by': 'system',
-                'source_file': 'nba_stats_20250814.json',
-            },
-            {
-                'load_id': 102,
-                'load_type': 'Analytics Engine',
-                'status': 'failed',
-                'started_at': '2025-08-14 03:00',
-                'completed_at': None,
-                'duration_seconds': 75,
-                'records_processed': 5000,
-                'records_failed': 125,
-                'initiated_by': 'ingest_bot',
-                'error_message': 'Parquet schema mismatch',
-                'source_file': 'agg_events_20250814.parquet',
-            }
-        ]
-        df_sample = pd.DataFrame(sample_loads)
-        df_sample['status_display'] = df_sample['status'].str.upper()
-        df_sample['started_at'] = pd.to_datetime(df_sample['started_at'], errors='coerce').dt.strftime('%m/%d %H:%M')
-        df_sample['completed_at'] = df_sample['completed_at'].apply(lambda x: pd.to_datetime(x, errors='coerce').strftime('%m/%d %H:%M') if pd.notna(x) and x else 'In Progress')
-        df_sample['duration_display'] = df_sample['duration_seconds'].apply(lambda x: f"{int(x//60)}m {int(x%60)}s" if pd.notna(x) else 'N/A')
-        st.dataframe(
-            df_sample[[ 'load_id', 'load_type', 'status_display', 'started_at', 'completed_at', 'duration_display', 'records_processed', 'records_failed', 'initiated_by' ]],
-            use_container_width=True,
-            hide_index=True
-        )
-        # Provide quick actions in mock mode
-        st.info('This is sample data shown because real data was not returned by the API.')
 
 else:
     st.info("No data loads found. Try adjusting your filters or check system connectivity.")
 
-"""Data Pipelines page: manage ETL processes."""

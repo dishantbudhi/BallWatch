@@ -19,8 +19,8 @@ SideBarLinks()
 
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
-    st.title("System Health Dashboard — Data Engineer")
-    st.caption("Real-time system status and logs for operations teams.")
+    st.title("System Health — Data Engineer")
+    st.write("")
 
 # Use environment variable to configure API base URL
 if 'api_base_url' not in st.session_state:
@@ -86,7 +86,7 @@ def call_post_raw(endpoint: str, data=None, timeout=10):
         return None
 
 
-"""System health and service status checks."""
+ 
 
 # ensure api base is set consistently
 api_client.ensure_api_base()
@@ -100,20 +100,16 @@ def api_post(endpoint, data):
 
 col1, col2, col3 = st.columns([3, 1, 1])
 with col1:
-    st.title("System Health Dashboard")
-    st.markdown("Real-time monitoring and system status")
+    st.title("System Health")
 
 with col2:
-    auto_refresh = st.checkbox("Auto-refresh (30s)", value=st.session_state.auto_refresh)
-    st.session_state.auto_refresh = auto_refresh
+    pass
 
 with col3:
     if st.button("Refresh Now", use_container_width=True):
         st.rerun()
 
-if st.session_state.auto_refresh:
-    time.sleep(30)
-    st.rerun()
+ 
 
 st.divider()
 

@@ -31,8 +31,8 @@ def get_player_matchup(endpoint_or_query: str):
 
 st.set_page_config(page_title='Player Matchup - Head Coach', layout='wide')
 SideBarLinks()
-st.title('Player Matchup Analysis — Head Coach')
-st.caption('Compare two players and view tactical recommendations.')
+st.title('Player Matchup — Head Coach')
+st.write('')
 
 def make_request(endpoint, method='GET', data=None):
     if endpoint.startswith('/basketball/players') and method == 'GET':
@@ -43,8 +43,22 @@ def make_request(endpoint, method='GET', data=None):
     return {}
 
 players = get_players({}) or []
+# Normalize to list of dicts
+if isinstance(players, dict) and 'players' in players:
+    players = players['players'] or []
+if not isinstance(players, list):
+    players = []
+
 if players:
-    player_names = sorted([f"{p.get('first_name','')} {p.get('last_name','')}".strip() for p in players if p.get('first_name') or p.get('last_name')])
+    # Deduplicate by player_id
+    dedup_map = {}
+    for p in players:
+        if isinstance(p, dict):
+            pid = p.get('player_id') or p.get('id')
+            if pid not in dedup_map:
+                dedup_map[pid] = p
+    unique_players = list(dedup_map.values())
+    player_names = sorted([f"{(p.get('first_name') or '').strip()} {(p.get('last_name') or '').strip()}".strip() for p in unique_players if isinstance(p, dict)])
 
     c1, c2 = st.columns(2)
     with c1:
@@ -57,8 +71,8 @@ if players:
             st.warning('Please select two different players.')
         else:
             try:
-                p1_id = [p.get('player_id') for p in players if f"{p.get('first_name','')} {p.get('last_name','')}".strip() == p1][0]
-                p2_id = [p.get('player_id') for p in players if f"{p.get('first_name','')} {p.get('last_name','')}".strip() == p2][0]
+                p1_id = [p.get('player_id') for p in unique_players if f"{p.get('first_name','')} {p.get('last_name','')}".strip() == p1][0]
+                p2_id = [p.get('player_id') for p in unique_players if f"{p.get('first_name','')} {p.get('last_name','')}".strip() == p2][0]
             except Exception:
                 st.error('Failed to resolve player IDs')
                 p1_id = p2_id = None
@@ -110,9 +124,8 @@ if players:
                     if data.get('matchup_games'):
                         st.subheader('Recent Matchups')
                         dfm = pd.DataFrame(data['matchup_games'])
-                        st.dataframe(dfm)
+                        st.dataframe(dfm, use_container_width=True, hide_index=True)
 
-                    with st.expander('Raw API Response'):
-                        st.json(data)
+                    # Removed raw API response per request
 
-"""Player matchup visualizations and comparisons."""
+ 
