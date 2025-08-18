@@ -1,6 +1,6 @@
-# BallWatch — CS3200 Project Template (Spring 2025)
+# HMS Sports Project Repository
 
-This template provides a small basketball analytics platform with a Streamlit UI, a Flask REST API, and a MySQL database initialized from SQL files. Use it to explore full‑stack analytics patterns.
+This repo contains our semester project for CS3200: Intro to Databases. It includes our infrastructure setup (containers), project databases, and UI pages.
 
 ## Repository layout
 
@@ -45,31 +45,34 @@ This template provides a small basketball analytics platform with a Streamlit UI
 
 4. If the app can’t reach the API, verify the `api` container and see `app/src/modules/api_client.py` for base URL resolution.
 
-## Functional overview
+## Description
+An all-in-one database for a high school sports team that streamlines activity for its users. Because the app focuses on specific user stories and personas, some views are intentionally scoped and may be “hard coded” to highlight relevant results for those roles.
 
-BallWatch is an end‑to‑end sample basketball analytics platform with distinct personas and workflows. The Streamlit UI talks to a Flask API that serves analytics and strategy endpoints backed by a MySQL schema.
+## Features
+This project supports role-based access with archetypical users. Each persona has tailored tools:
 
-### Personas and pages
+- Coach (Head Coach) Features
+  - Scouting & Game Planning: opponent reports (key players, performance snapshot, tactical notes), create/activate game plans
+  - Lineup & Situational: lineup plus/minus and ratings; situational analytics (clutch, trends, splits)
+  - Player Matchup: head‑to‑head advantage indicators with tactical recommendations
 
-- Superfan
-  - Player Finder: filter players by position, team, age, and salary; optionally enrich with season averages; sort/chart by key stats.
-  - Player Comparison: pick two players and compare per‑game averages, radar chart, and recent box scores.
-  - Game Analysis: search historical games by team/date/season/type and view game details and box scores.
+- Superfan Features
+  - Player Finder: filter by position/team/age/salary; add season averages; rank/chart by stat
+  - Player Comparison: side‑by‑side metrics, radar chart, recent box scores
+  - Game Analysis: search historical games and view box scores
 
-- Data Engineer
-  - Data Pipelines: view data loads history, statuses, and metrics; retry a load; mark failed loads as resolved.
-  - System Health: system status, DB health, metrics, and recent error logs with severity breakdown.
-  - Data Cleanup: review data validation errors and mark items as resolved; schedule cleanups.
+- Data Engineer Tools
+  - Data Pipelines: view load history and metrics; retry loads; mark failures as resolved
+  - System Health: overall/DB status, platform metrics, recent error logs
+  - Data Cleanup: review data validation errors and mark items as resolved; schedule cleanup tasks
 
-- Head Coach
-  - Scouting & Game Planning: generate opponent reports (key players, performance snapshot, tactical notes) and create/activate game plans.
-  - Lineup & Situational: analyze lineup plus/minus and ratings; see situational analytics (clutch, trends, splits) with recommendations.
-  - Player Matchup: head‑to‑head player matchup analysis with advantage indicator and tactical recommendation.
+- General Manager Tools
+  - Player Progress: growth potential and development insights using evaluation data
+  - Draft Rankings: load and update player evaluations (ratings, notes)
+  - Contract Efficiency: value vs. estimated salary analysis and signing strategy helpers
 
-- General Manager
-  - Player Progress: development metrics and growth potential for players using draft evaluation data.
-  - Draft Rankings: load and update player evaluations (ratings, notes, projected round).
-  - Contract Efficiency: value vs. estimated salary analysis and signing strategy helpers.
+- App Features
+  - Clear entry points to tools and a navigation sidebar for quick access and logout
 
 ### Core API flows
 
