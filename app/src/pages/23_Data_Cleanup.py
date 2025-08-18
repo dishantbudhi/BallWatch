@@ -144,7 +144,21 @@ with tab1:
                         # Add action buttons for unresolved errors
                         if not resolved_at:
                             if st.button(f"Mark as Resolved", key=f"resolve_{error_id}"):
-                                st.info("Resolution functionality would go here")
+                                # Use admin route to update corresponding SystemLogs row
+                                try:
+                                    update_payload = {
+                                        'resolved_by': st.session_state.get('username', 'system'),
+                                        'resolution_notes': 'Marked resolved from Data Cleanup page'
+                                    }
+                                    # Use dedicated error-log resolver on admin blueprint
+                                    res = api_client.api_put(f"/system/error-logs/{error_id}", data=update_payload)
+                                    if res:
+                                        st.success("Marked as resolved")
+                                        st.rerun()
+                                    else:
+                                        st.warning("Failed to mark as resolved. ID may not correspond to a data_load entry.")
+                                except Exception:
+                                    st.error("Error marking as resolved.")
         else:
             st.info("No data validation errors found for the selected criteria")
     else:

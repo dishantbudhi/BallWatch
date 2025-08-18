@@ -1,6 +1,7 @@
 """Flask REST API entry point and application factory."""
 
 from flask import Flask
+from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 import time
@@ -16,6 +17,10 @@ from backend.analytics.analytics_routes import analytics
 from backend.strategy.strategy_routes import strategy
 from backend.admin.admin_routes import admin
 from backend.auth.auth_routes import auth
+from backend.personas.superfan_routes import superfan
+from backend.personas.data_engineer_routes import data_engineer
+from backend.personas.coach_routes import coach
+from backend.personas.gm_routes import gm
 
 
 def wait_for_db(app, max_retries=30, retry_delay=2):
@@ -53,6 +58,8 @@ def wait_for_db(app, max_retries=30, retry_delay=2):
 def create_app():
     """Create and configure the BallWatch Flask application."""
     app = Flask(__name__)
+    # Enable CORS for Streamlit (default 8501) and localhost development
+    CORS(app, resources={r"/*": {"origins": ["http://localhost:8501", "http://127.0.0.1:8501", "*"]}})
     
     # Load environment configuration
     load_dotenv()
@@ -107,7 +114,12 @@ def _register_blueprints(app):
         (analytics, '/analytics', 'Performance Analytics'),
         (strategy, '/strategy', 'Game Plans & Draft Evaluations'),
         (admin, '/system', 'System Administration'),
-        (auth, '/auth', 'Authentication & User Management')
+        (auth, '/auth', 'Authentication & User Management'),
+        # Persona-oriented prefixes (lightweight proxies)
+        (superfan, '/superfan', 'Superfan features'),
+        (data_engineer, '/data-engineer', 'Data Engineer features'),
+        (coach, '/coach', 'Head Coach features'),
+        (gm, '/gm', 'General Manager features')
     ]
     
     for blueprint, prefix, description in blueprints:

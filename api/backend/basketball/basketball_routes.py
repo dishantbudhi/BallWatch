@@ -1252,14 +1252,19 @@ def get_game_details(game_id):
                 p.first_name,
                 p.last_name,
                 p.position,
-                tp.team_id,
+                COALESCE(tp_at_game.team_id, tp_current.team_id) AS team_id,
                 t.name AS team_name
             FROM PlayerGameStats pgs
             JOIN Players p ON pgs.player_id = p.player_id
-            JOIN TeamsPlayers tp ON p.player_id = tp.player_id AND tp.left_date IS NULL
-            JOIN Teams t ON tp.team_id = t.team_id
+            LEFT JOIN TeamsPlayers tp_at_game
+                ON tp_at_game.player_id = p.player_id
+               AND tp_at_game.joined_date <= (SELECT g.game_date FROM Game g WHERE g.game_id = pgs.game_id)
+               AND (tp_at_game.left_date IS NULL OR tp_at_game.left_date >= (SELECT g.game_date FROM Game g WHERE g.game_id = pgs.game_id))
+            LEFT JOIN TeamsPlayers tp_current
+                ON tp_current.player_id = p.player_id AND tp_current.left_date IS NULL
+            LEFT JOIN Teams t ON t.team_id = COALESCE(tp_at_game.team_id, tp_current.team_id)
             WHERE pgs.game_id = %s
-            ORDER BY tp.team_id, pgs.points DESC
+            ORDER BY team_id, pgs.points DESC
         ''', (game_id,))
 
         player_stats = cursor.fetchall()

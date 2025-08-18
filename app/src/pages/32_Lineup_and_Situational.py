@@ -11,7 +11,7 @@ import numpy as np
 from datetime import datetime
 import json
 
-"""Lineup and situational analysis for head coach."""
+ 
 
 logger = logging.getLogger(__name__)
 api_client.ensure_api_base()
@@ -38,8 +38,7 @@ st.set_page_config(page_title='Lineup & Situational - Head Coach', layout='wide'
 SideBarLinks()
 
 # Page header
-st.title('Lineup & Situational Analysis — Head Coach')
-st.caption('Analyze lineup effectiveness and situational performance.')
+st.title('Lineup & Situational — Head Coach')
 
 # Load teams data
 @st.cache_data(ttl=300)
@@ -130,7 +129,7 @@ team_names = [t.get('name') for t in teams if isinstance(t, dict) and t.get('nam
 team_map = {t.get('name'): t.get('team_id') for t in teams if isinstance(t, dict) and t.get('name') and t.get('team_id')}
 
 # Tabs
-tab1, tab2 = st.tabs(['📊 Lineup Analysis', '📈 Situational Performance'])
+tab1, tab2 = st.tabs(['Lineup Analysis', 'Situational Performance'])
 
 # Tab 1: Lineup Analysis (replaced with more robust flow inspired by provided implementation)
 with tab1:
@@ -184,16 +183,28 @@ with tab1:
                     if not lineups:
                         st.info('No lineup configurations matched the filters.')
                     else:
-                        # ensure consistent dict shape
+                        # ensure consistent dict shape and robust numeric coercion
+                        def _num(val):
+                            try:
+                                if val is None or (isinstance(val, str) and val.strip() == ''):
+                                    return 0.0
+                                return float(val)
+                            except Exception:
+                                try:
+                                    # last resort
+                                    return float(pd.to_numeric(val, errors='coerce'))
+                                except Exception:
+                                    return 0.0
+
                         cleaned = []
                         for l in lineups:
                             if not isinstance(l, dict):
                                 continue
                             cleaned_item = {
-                                'lineup': l.get('lineup', str(l)),
-                                'plus_minus': pd.to_numeric(l.get('plus_minus', 0), errors='coerce').fillna(0),
-                                'offensive_rating': pd.to_numeric(l.get('offensive_rating', 0), errors='coerce').fillna(0),
-                                'defensive_rating': pd.to_numeric(l.get('defensive_rating', 0), errors='coerce').fillna(0)
+                                'lineup': str(l.get('lineup') if l.get('lineup') is not None else l),
+                                'plus_minus': _num(l.get('plus_minus', 0)),
+                                'offensive_rating': _num(l.get('offensive_rating', 0)),
+                                'defensive_rating': _num(l.get('defensive_rating', 0))
                             }
                             cleaned.append(cleaned_item)
 
@@ -267,8 +278,18 @@ with tab1:
                                         elif pm < 0:
                                             st.warning(f"{lineup} ({pm:.1f})")
 
-                            with st.expander('📋 View Full Lineup Data'):
-                                st.dataframe(df, use_container_width=True, hide_index=True)
+                            st.subheader('Full Lineup Data')
+                            display_cols = ['lineup', 'plus_minus', 'offensive_rating', 'defensive_rating']
+                            pretty = df[display_cols].rename(columns={
+                                'lineup': 'Lineup',
+                                'plus_minus': 'Plus/Minus',
+                                'offensive_rating': 'Off Rating',
+                                'defensive_rating': 'Def Rating'
+                            }).copy()
+                            pretty['Plus/Minus'] = pretty['Plus/Minus'].map(lambda v: f"{v:+.1f}")
+                            pretty['Off Rating'] = pretty['Off Rating'].map(lambda v: f"{v:.1f}")
+                            pretty['Def Rating'] = pretty['Def Rating'].map(lambda v: f"{v:.1f}")
+                            st.dataframe(pretty, use_container_width=True, hide_index=True)
 
 # Tab 2: Enhanced Situational Performance
 with tab2:
@@ -647,20 +668,6 @@ with tab2:
                             else:
                                 st.success(f"{priority}: {rec}")
                     else:
-                        st.success("✅ Team performing well across all situational metrics!")
+                        st.info("Mixed results across situational metrics — see charts above for details.")
                     
-                    # Export option
-                    st.markdown("---")
-                    if st.button("📊 Export Report", type="secondary"):
-                        report = {
-                            'team': selected_team_sit,
-                            'games_analyzed': sit_data.get('games_analyzed'),
-                            'date': datetime.now().strftime('%Y-%m-%d'),
-                            'situational_data': situational
-                        }
-                        st.download_button(
-                            label="Download JSON Report",
-                            data=pd.DataFrame([report]).to_json(),
-                            file_name=f"situational_report_{selected_team_sit}_{datetime.now().strftime('%Y%m%d')}.json",
-                            mime="application/json"
-                        )
+                    # Removed Export Report per request

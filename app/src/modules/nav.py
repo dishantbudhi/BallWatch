@@ -15,8 +15,9 @@ def AboutNav():
 def SuperfanNav():
     """Sidebar links for the Superfan persona."""
     st.sidebar.page_link("pages/10_Superfan_Home.py", label="Home")
-    st.sidebar.page_link("pages/11_Player_Finder.py", label="Player Finder")
+    # Order: Compare Players before Player Finder per UX request
     st.sidebar.page_link("pages/12_Player_Comparison.py", label="Compare Players")
+    st.sidebar.page_link("pages/11_Player_Finder.py", label="Player Finder")
     st.sidebar.page_link("pages/13_Historical_Game_Results.py", label="Game Results")
 
 

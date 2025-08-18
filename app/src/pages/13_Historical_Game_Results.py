@@ -22,8 +22,8 @@ API_BASE = api_client.ensure_api_base()
 logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Game Search & Box Scores", layout="wide")
 SideBarLinks()  # shared sidebar/nav
-st.title("📅 Game Search & Box Scores")
-st.caption("Search games by date, team, season, and view full box scores.")
+st.title("Game Search & Box Scores")
+st.write("")
 
 # ---------------- Session Defaults (keep results sticky) ----------------
 if "gs_search_active" not in st.session_state:
@@ -160,7 +160,7 @@ with col_btns[1]:
         st.session_state.gs_search_active = False
         st.session_state.gs_selected_game_id = None
 
-st.markdown("---")
+ 
 
 # -------------------------------------------------------------------
 # Results + selection
@@ -231,6 +231,26 @@ if st.session_state.gs_search_active:
                 default_index = options.index(preserved_opt)
 
             st.subheader("Matching Games")
+            # Auto-select: last occurring completed game with highest average home+away score
+            try:
+                completed_games = [g for g in games if g.get("status") == "completed"]
+                if completed_games:
+                    # compute average total score
+                    def total(g):
+                        try:
+                            hs = float(g.get("home_score", 0) or 0)
+                            as_ = float(g.get("away_score", 0) or 0)
+                            return (hs + as_) / 2.0
+                        except Exception:
+                            return 0.0
+                    # pick the one with highest average; if tie, prefer latest date
+                    completed_games.sort(key=lambda g: (total(g), str(g.get("game_date", ""))), reverse=True)
+                    best = completed_games[0]
+                    best_opt = fmt_game_row(best)
+                    if best_opt in options:
+                        default_index = options.index(best_opt)
+            except Exception:
+                pass
             sel = st.selectbox("Choose a game", options=options, index=default_index, key="gs_game_select")
 
             # Update selected game id from current selection
@@ -250,7 +270,7 @@ if st.session_state.gs_search_active:
             present = [c for c in show_cols if c in games_df.columns]
             st.dataframe(games_df[present], use_container_width=True, hide_index=True)
 
-st.markdown("---")
+ 
 
 # -------------------------------------------------------------------
 # Game details + player box scores
@@ -382,4 +402,4 @@ if st.session_state.gs_search_active and selected_game_id:
             afig = px.bar(achart, x="points", y="player_name", orientation="h", title=f"{away_team} — Top {min(top_n, len(achart))} by Points")
             st.plotly_chart(afig, use_container_width=True)
 else:
-    st.info("Pick one or two Team Names and set any date/season filters, then press **Search Games**. Select a game to view full box scores.")
+    st.info("Pick one or two Team Names and set any date/season filters, then press Search Games. Select a game to view full box scores.")

@@ -14,10 +14,8 @@ st.set_page_config(page_title="Player Comparison - Superfan", layout="wide")
 # Shared sidebar/nav
 SideBarLinks()
 
-st.title("🆚 Player Comparison — Superfan")
-st.caption("Compare two players side-by-side, view recent games, and visualize trends.")
-
-"""Player Comparison tools and visualizations."""
+st.title("Player Comparison — Superfan")
+st.write("")
 
 # ------------------------------------------------------------------------------------
 # Session defaults
@@ -89,6 +87,20 @@ def resolve_team_ids_by_name(name_query: str) -> list[int]:
     contains = df[df["name"].str.contains(name_query, case=False, na=False)]
     return contains["team_id"].dropna().astype(int).tolist()
 
+def _safe_df_rows(rows):
+    try:
+        if isinstance(rows, list):
+            return pd.DataFrame(rows)
+        if isinstance(rows, dict):
+            # common shape: {players: [...]} or already a row-dict
+            if 'players' in rows and isinstance(rows['players'], list):
+                return pd.DataFrame(rows['players'])
+            # fallback: make single-row DF
+            return pd.DataFrame([rows])
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
+
 @st.cache_data(ttl=180)
 def load_all_players(position: str | None = None, team_name: str | None = None) -> pd.DataFrame:
     base_params = {}
@@ -106,21 +118,21 @@ def load_all_players(position: str | None = None, team_name: str | None = None) 
                 part = data.get("players", []) if isinstance(data, dict) else (data or [])
                 rows.extend(part)
             if rows:
-                rows = list({r.get("player_id"): r for r in rows if r.get("player_id") is not None}.values())
-                df = pd.DataFrame(rows)
+                rows = list({r.get("player_id"): r for r in rows if isinstance(r, dict) and r.get("player_id") is not None}.values())
+                df = _safe_df_rows(rows)
             else:
                 df = pd.DataFrame()
         else:
             data = api_get("/basketball/players", base_params)
             rows = data.get("players", []) if isinstance(data, dict) else (data or [])
-            df = pd.DataFrame(rows)
+            df = _safe_df_rows(rows)
             if not df.empty and "current_team" in df.columns:
                 mask = df["current_team"].fillna("").str.contains(team_name, case=False, na=False)
                 df = df[mask].reset_index(drop=True)
     else:
         data = api_get("/basketball/players", base_params)
         rows = data.get("players", []) if isinstance(data, dict) else (data or [])
-        df = pd.DataFrame(rows)
+        df = _safe_df_rows(rows)
 
     if not df.empty:
         if "position" not in df.columns:
@@ -152,7 +164,7 @@ fcol1, fcol2 = st.columns([1.5, 1.5])
 with fcol1:
     position_filter = st.selectbox(
         "Position Filter (optional)",
-        ["", "PG", "SG", "SF", "PF", "C", "Guard", "Forward", "Center"],
+        ["", "PG", "SG", "SF", "PF", "C"],
         index=0,
         key="pos_filter"
     ) or None
@@ -174,24 +186,19 @@ if players_df.empty:
     st.stop()
 
 # ------------------------------------------------------------------------------------
-# Player pickers
+# Player pickers (deduplicated, no extra search inputs)
 # ------------------------------------------------------------------------------------
+players_df = players_df.drop_duplicates(subset=["player_id"]) if "player_id" in players_df.columns else players_df
+name_options = players_df["display"].drop_duplicates().tolist()
+
 scol1, scol2 = st.columns(2)
 with scol1:
-    search1 = st.text_input("Search Player 1 by name", value="", key="search_p1")
-    df1 = players_df.copy()
-    if search1.strip():
-        df1 = df1[df1["display"].str.contains(search1.strip(), case=False, na=False)]
-    player1 = st.selectbox("Select Player 1", options=df1["display"].tolist(),
-                           index=0 if not df1.empty else None, key="select_p1")
+    player1 = st.selectbox("Select Player 1", options=name_options,
+                           index=0 if name_options else None, key="select_p1")
 with scol2:
-    search2 = st.text_input("Search Player 2 by name", value="", key="search_p2")
-    df2 = players_df.copy()
-    if search2.strip():
-        df2 = df2[df2["display"].str.contains(search2.strip(), case=False, na=False)]
-    default_idx = 1 if len(df2) > 1 else 0
-    player2 = st.selectbox("Select Player 2", options=df2["display"].tolist(),
-                           index=default_idx if not df2.empty else None, key="select_p2")
+    default_idx = 1 if len(name_options) > 1 else 0
+    player2 = st.selectbox("Select Player 2", options=name_options,
+                           index=default_idx if name_options else None, key="select_p2")
 
 def pick_id(df, display):
     if df.empty or not display:

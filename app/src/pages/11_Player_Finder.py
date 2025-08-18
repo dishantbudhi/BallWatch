@@ -68,8 +68,7 @@ st.set_page_config(page_title="Player Finder - Superfan", layout="wide")
 # Render shared sidebar/nav
 SideBarLinks()
 
-st.title("🔎 Player Finder — Superfan")
-st.caption("Search and compare players; optionally include season averages.")
+st.title("Player Finder — Superfan")
 
 # ---------------- Session Defaults (to keep results sticky across reruns) -------------
 if "search_active" not in st.session_state:
@@ -95,6 +94,18 @@ def resolve_team_ids_by_name(name_query: str) -> list[int]:
         return []
     mask = df["name"].str.contains(name_query, case=False, na=False)
     return df.loc[mask, "team_id"].dropna().astype(int).tolist()
+
+def _safe_players_df(rows):
+    try:
+        if isinstance(rows, list):
+            return pd.DataFrame(rows)
+        if isinstance(rows, dict):
+            if 'players' in rows and isinstance(rows['players'], list):
+                return pd.DataFrame(rows['players'])
+            return pd.DataFrame([rows])
+        return pd.DataFrame()
+    except Exception:
+        return pd.DataFrame()
 
 @st.cache_data(ttl=120)
 def load_players(position=None, team_name=None, min_age=None, max_age=None, min_salary=None, max_salary=None):
@@ -127,7 +138,7 @@ def load_players(position=None, team_name=None, min_age=None, max_age=None, min_
     else:
         rows = get_players(base_params)
 
-    return pd.DataFrame(rows)
+    return _safe_players_df(rows)
 
 @st.cache_data(ttl=120)
 def fetch_player_stats(player_id: int):
@@ -162,7 +173,7 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     position = st.selectbox(
         "Position",
-        options=["", "PG", "SG", "SF", "PF", "C", "Guard", "Forward", "Center"],
+        options=["", "PG", "SG", "SF", "PF", "C"],
         index=0,
         help="Filter by the player's listed position.",
         key="pf_position"
@@ -180,22 +191,30 @@ with col5:
 with col6:
     max_salary = st.number_input("Max Salary", min_value=0, value=0, step=100_000, help="0 means no max", key="pf_maxsal")
 with col7:
-    include_stats = st.checkbox("Include Season Averages (/basketball/players/<id>/stats)", value=True, key="pf_includestats")
+    include_stats = st.checkbox("Include Season Averages", value=True, key="pf_includestats")
 
 col8, col9, col10 = st.columns([1, 1, 2])
 with col8:
     max_stats = st.slider("Max Players for Stats", 10, 200, 50, 10, key="pf_maxstats")
 with col9:
-    stat_to_sort = st.selectbox(
+    stat_display_to_key = {
+        "Points per game": "avg_points",
+        "Rebounds per game": "avg_rebounds",
+        "Assists per game": "avg_assists",
+        "Steals per game": "avg_steals",
+        "Blocks per game": "avg_blocks",
+        "Turnovers per game": "avg_turnovers",
+        "Plus/Minus": "avg_plus_minus",
+        "Minutes per game": "avg_minutes",
+        "Shooting %": "avg_shooting_pct",
+    }
+    stat_display = st.selectbox(
         "Stat to Sort/Chart",
-        options=[
-            "avg_points", "avg_rebounds", "avg_assists",
-            "avg_steals", "avg_blocks", "avg_turnovers",
-            "avg_plus_minus", "avg_minutes", "avg_shooting_pct",
-        ],
+        options=list(stat_display_to_key.keys()),
         index=0,
-        key="pf_stat"
+        key="pf_stat_display"
     )
+    stat_to_sort = stat_display_to_key[stat_display]
 with col10:
     # Make the Search button sticky: set a session flag we can rely on across reruns
     if st.button("Search Players", type="primary", key="pf_search_btn"):
@@ -244,7 +263,6 @@ if st.session_state.search_active:
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     if include_stats:
-        st.info("Fetching season averages… this may take a moment for many players.")
         df_stats = enrich_with_stats(df, max_players=max_stats)
     else:
         df_stats = df.copy()
@@ -258,10 +276,12 @@ if st.session_state.search_active:
         df_stats.get("first_name", "").astype(str) + " " + df_stats.get("last_name", "").astype(str)
     ).str.strip()
 
-    # Sort by selected stat (desc)
+    # Ensure numeric sorting for selected stat (desc)
+    if stat_to_sort in df_stats.columns:
+        df_stats[stat_to_sort] = pd.to_numeric(df_stats[stat_to_sort], errors="coerce")
     df_sorted = df_stats.sort_values(by=stat_to_sort, ascending=False, na_position="last")
 
-    st.subheader(f"Top Players by **{stat_to_sort}**")
+    st.subheader(f"Top Players by {stat_display}")
     top_n = st.slider("Show Top N", 5, 50, 15, 5, key="pf_topn")
 
     # Chart
@@ -277,7 +297,7 @@ if st.session_state.search_active:
         y="player_name",
         color="position" if "position" in chart_df.columns else None,
         orientation="h",
-        title=f"Top {min(top_n, len(chart_df))} by {stat_to_sort}"
+        title=f"Top {min(top_n, len(chart_df))} by {stat_display}"
     )
     st.plotly_chart(fig, use_container_width=True)
 

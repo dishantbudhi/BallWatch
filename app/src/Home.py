@@ -355,7 +355,7 @@ SideBarLinks(show_home=True)
 # Page title with connection status
 col1, col2 = st.columns([4, 1])
 with col1:
-    st.title('BallWatch: Basketball Analytics')
+    st.title('BallWatch')
 with col2:
     if st.session_state.get('api_connection_status') == 'connected':
         st.success('🟢 Connected')
@@ -691,7 +691,7 @@ if not st.session_state.get('authenticated', False):
             test_api_connection()
         st.session_state['connection_tested'] = True
     
-    st.markdown("## Choose your role to access BallWatch:")
+    st.markdown("## Choose your role:")
     
     # Create columns for persona cards (2x2 grid)
     col1, col2 = st.columns(2)

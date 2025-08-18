@@ -3,7 +3,7 @@ logger = logging.getLogger(__name__)
 import streamlit as st
 from modules.nav import SideBarLinks
 
-"""Data Engineer home: pipeline and DB tools."""
+
 
 st.set_page_config(layout='wide')
 SideBarLinks()

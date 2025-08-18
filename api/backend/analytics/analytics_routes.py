@@ -5,6 +5,71 @@ from backend.db_connection import db
 
 # Create blueprint
 analytics = Blueprint('analytics', __name__)
+#------------------------------------------------------------
+# Player comparisons for side-by-side analysis [Johnny-1.4, Andre-4.2]
+@analytics.route('/player-comparisons', methods=['GET'])
+def get_player_comparisons():
+    """
+    Compare two or more players side-by-side using basic per-game averages.
+
+    Query params:
+      - player_ids: comma-separated player_id list (min 2)
+      - season: optional season filter
+    """
+    try:
+        current_app.logger.info('GET /player-comparisons handler started')
+
+        player_ids_param = request.args.get('player_ids', '')
+        season = request.args.get('season')
+
+        player_ids = [int(pid) for pid in player_ids_param.split(',') if pid.strip().isdigit()]
+        if len(player_ids) < 2:
+            return make_response(jsonify({"error": "Provide at least two player_ids"}), 400)
+
+        cursor = db.get_db().cursor()
+
+        placeholders = ','.join(['%s'] * len(player_ids))
+        params = list(player_ids)
+
+        query = f'''
+            SELECT
+                p.player_id,
+                p.first_name,
+                p.last_name,
+                p.position,
+                t.name AS team_name,
+                ROUND(AVG(pgs.points), 1) AS avg_points,
+                ROUND(AVG(pgs.rebounds), 1) AS avg_rebounds,
+                ROUND(AVG(pgs.assists), 1) AS avg_assists,
+                ROUND(AVG(pgs.plus_minus), 1) AS avg_plus_minus,
+                ROUND(AVG(pgs.minutes_played), 1) AS avg_minutes,
+                COUNT(pgs.game_id) AS games_played
+            FROM Players p
+            LEFT JOIN TeamsPlayers tp ON p.player_id = tp.player_id AND tp.left_date IS NULL
+            LEFT JOIN Teams t ON tp.team_id = t.team_id
+            LEFT JOIN PlayerGameStats pgs ON p.player_id = pgs.player_id
+            LEFT JOIN Game g ON pgs.game_id = g.game_id
+            WHERE p.player_id IN ({placeholders})
+        '''
+
+        if season:
+            query += ' AND g.season = %s'
+            params.append(season)
+
+        query += ' GROUP BY p.player_id, p.first_name, p.last_name, p.position, t.name'
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        return make_response(jsonify({
+            'players': rows,
+            'total': len(rows)
+        }), 200)
+
+    except Exception as e:
+        current_app.logger.error(f'Error in get_player_comparisons: {str(e)}')
+        return make_response(jsonify({"error": "Failed to fetch player comparisons"}), 500)
+
 
 
 #------------------------------------------------------------
@@ -150,7 +215,7 @@ def get_player_matchups():
             elif advantage == 'Player2':
                 recommendation = f"Avoid giving {player2_id} wide-open opportunities; use help defense and double-team in pick-and-rolls."
             else:
-                recommendation = "Matchup appears even â€” focus on limiting turnovers and contesting shots."
+                recommendation = "Matchup appears even — focus on limiting turnovers and contesting shots."
         except Exception:
             player1_off_rating = player2_off_rating = player1_def_eff = player2_def_eff = 0
             advantage = 'Unknown'
@@ -436,8 +501,12 @@ def get_lineup_configurations():
 
         cursor = db.get_db().cursor()
 
-        # FIX: Corrected query to ensure all players in a lineup belong to the selected team.
-        lineup_query = '''
+        # Strategy:
+        # 1) Try strict team-membership (current roster) filter
+        # 2) If empty, relax to historical membership (ignoring left_date)
+        # 3) If still empty, relax fully (no membership filter), still scoped to lc.team_id
+
+        strict_query = '''
             SELECT
                 lc.lineup_id,
                 GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) ORDER BY pl.position_in_lineup SEPARATOR ', ') AS lineup,
@@ -458,8 +527,51 @@ def get_lineup_configurations():
             LIMIT 10;
         '''
 
-        cursor.execute(lineup_query, [team_id, team_id])
-        lineup_stats = cursor.fetchall()
+        cursor.execute(strict_query, [team_id, team_id])
+        lineup_stats = cursor.fetchall() or []
+
+        if not lineup_stats:
+            relaxed_query = '''
+                SELECT
+                    lc.lineup_id,
+                    GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) ORDER BY pl.position_in_lineup SEPARATOR ', ') AS lineup,
+                    lc.plus_minus,
+                    lc.offensive_rating,
+                    lc.defensive_rating
+                FROM LineupConfiguration lc
+                JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
+                JOIN Players p ON pl.player_id = p.player_id
+                WHERE lc.team_id = %s
+                GROUP BY lc.lineup_id, lc.plus_minus, lc.offensive_rating, lc.defensive_rating
+                HAVING SUM(
+                    CASE WHEN pl.player_id IN (
+                        SELECT player_id FROM TeamsPlayers WHERE team_id = %s
+                    ) THEN 0 ELSE 1 END
+                ) = 0
+                ORDER BY lc.plus_minus DESC
+                LIMIT 10;
+            '''
+            cursor.execute(relaxed_query, [team_id, team_id])
+            lineup_stats = cursor.fetchall() or []
+
+        if not lineup_stats:
+            fallback_query = '''
+                SELECT
+                    lc.lineup_id,
+                    GROUP_CONCAT(CONCAT(p.first_name, ' ', p.last_name) ORDER BY pl.position_in_lineup SEPARATOR ', ') AS lineup,
+                    lc.plus_minus,
+                    lc.offensive_rating,
+                    lc.defensive_rating
+                FROM LineupConfiguration lc
+                JOIN PlayerLineups pl ON lc.lineup_id = pl.lineup_id
+                JOIN Players p ON pl.player_id = p.player_id
+                WHERE lc.team_id = %s
+                GROUP BY lc.lineup_id, lc.plus_minus, lc.offensive_rating, lc.defensive_rating
+                ORDER BY lc.plus_minus DESC
+                LIMIT 10;
+            '''
+            cursor.execute(fallback_query, [team_id])
+            lineup_stats = cursor.fetchall() or []
 
         response_data = {
             'team_id': team_id,

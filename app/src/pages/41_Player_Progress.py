@@ -68,9 +68,13 @@ def make_request(endpoint, method='GET', data=None):
 # Load data
 if st.button("Load Player Data"):
     players_data = make_request("/basketball/players")
-    if players_data and 'players' in players_data:
-        st.session_state['players'] = players_data['players']
-        st.success(f"Loaded {len(players_data['players'])} players")
+    loaded_players = []
+    if isinstance(players_data, dict):
+        loaded_players = players_data.get('players') or []
+    elif isinstance(players_data, list):
+        loaded_players = players_data
+    st.session_state['players'] = loaded_players
+    st.success(f"Loaded {len(loaded_players)} players")
 
     # Also load evaluations for development insights
     eval_data = make_request("/strategy/draft-evaluations")
@@ -175,7 +179,8 @@ if 'players' in st.session_state or 'evaluations' in st.session_state:
                 
                 selected_player = st.selectbox(
                     "Select Player:",
-                    options=list(player_options.keys())
+                    options=list(player_options.keys()),
+                    key="gm_progress_selected_player"
                 )
                 
                 if selected_player:
@@ -302,15 +307,6 @@ if 'players' in st.session_state or 'evaluations' in st.session_state:
 else:
     st.info("Click 'Load Player Data' to begin tracking player progress and development.")
     
-    # Show sample data structure
-    st.subheader("Expected Data Structure")
-    st.code("""
-    Player data should include:
-    - Player identification (first_name, last_name, position)
-    - Current ratings (overall_rating, offensive_rating, defensive_rating)
-    - Potential rating for development tracking
-    - Scouting information (strengths, weaknesses, scout_notes)
-    """)
 
 def get_draft_evaluations():
     # lightweight local placeholder — other pages implement full logic
