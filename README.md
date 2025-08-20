@@ -1,4 +1,4 @@
-# HMS Sports Project Repository
+# BallWatch Project Repository
 
 This repo contains our semester project for CS3200: Intro to Databases. It includes our infrastructure setup (containers), project databases, and UI pages.
 
@@ -150,5 +150,3 @@ This project supports role-based access with archetypical users. Each persona ha
 
 - Follow the existing structure: UI under `app/src/`, backend blueprints under `api/backend/`.
 - Add unit tests and manual API checks for endpoint shapes when changing backend output.
-
-If you want, tell me which README section to expand or any wording change you prefer.
